@@ -344,6 +344,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       user: null, isAuthenticated: false, tasks: [], categories: [],
       friends: [], projects: [], projectTasks: [], currentProject: null,
       posts: [], conversations: [], chatMessages: [], currentChatFriend: null,
+      // social state — must be cleared so a subsequent login never sees stale data
+      pendingRequests: [], sentRequests: [],
+      videoCalls: [], activeCall: null,
     });
   },
 
