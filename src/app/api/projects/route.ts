@@ -10,6 +10,7 @@ export async function GET() {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
+    // Find all project memberships for this user
     const memberships = await db.projectMember.findMany({
       where: { userId },
       include: {
@@ -65,6 +66,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Project name is required" }, { status: 400 });
     }
 
+    // Create project and auto-add owner as member
     const project = await db.project.create({
       data: {
         name: name.trim(),
@@ -86,27 +88,10 @@ export async function POST(request: NextRequest) {
             user: { select: { id: true, username: true, name: true, avatar: true } },
           },
         },
-        _count: { select: { tasks: true } },
       },
     });
 
-    // Shape to match GET so the frontend Project type is satisfied
-    const shaped = {
-      id: project.id,
-      name: project.name,
-      description: project.description,
-      color: project.color,
-      icon: project.icon,
-      ownerId: project.ownerId,
-      owner: project.owner,
-      myRole: "owner" as const,
-      members: project.members,
-      taskCount: project._count.tasks,
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-    };
-
-    return NextResponse.json(shaped, { status: 201 });
+    return NextResponse.json(project, { status: 201 });
   } catch (error) {
     console.error("Create project error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

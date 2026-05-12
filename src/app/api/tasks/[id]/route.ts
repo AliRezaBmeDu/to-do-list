@@ -20,17 +20,6 @@ export async function PUT(
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    // completedAt rules:
-    //   • status explicitly set to "done" AND not already stamped → stamp now
-    //   • status explicitly set to something other than "done"    → clear it
-    //   • status not present in body at all                       → leave it alone
-    const completedAtPatch =
-      body.status === "done" && !existing.completedAt
-        ? { completedAt: new Date().toISOString() }
-        : body.status !== undefined && body.status !== "done"
-        ? { completedAt: null }
-        : {};
-
     const task = await db.task.update({
       where: { id },
       data: {
@@ -44,7 +33,8 @@ export async function PUT(
         ...(body.tags !== undefined && { tags: body.tags }),
         ...(body.isRecurring !== undefined && { isRecurring: body.isRecurring }),
         ...(body.recurRule !== undefined && { recurRule: body.recurRule || null }),
-        ...completedAtPatch,
+        ...(body.status === "done" && !existing.completedAt && { completedAt: new Date().toISOString() }),
+        ...(body.status !== "done" && { completedAt: null }),
       },
       include: { category: true },
     });

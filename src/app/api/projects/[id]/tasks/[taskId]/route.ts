@@ -45,17 +45,6 @@ export async function PUT(
       }
     }
 
-    // completedAt rules:
-    //   • status explicitly set to "done" AND not already stamped → stamp now
-    //   • status explicitly set to something other than "done"    → clear it
-    //   • status not present in body at all                       → leave it alone
-    const completedAtPatch =
-      body.status === "done" && !existing.completedAt
-        ? { completedAt: new Date().toISOString() }
-        : body.status !== undefined && body.status !== "done"
-        ? { completedAt: null }
-        : {};
-
     const task = await db.projectTask.update({
       where: { id: taskId },
       data: {
@@ -69,7 +58,8 @@ export async function PUT(
         ...(body.isRecurring !== undefined && { isRecurring: body.isRecurring }),
         ...(body.recurRule !== undefined && { recurRule: body.recurRule || null }),
         ...(body.assigneeId !== undefined && { assigneeId: body.assigneeId || null }),
-        ...completedAtPatch,
+        ...(body.status === "done" && !existing.completedAt && { completedAt: new Date().toISOString() }),
+        ...(body.status !== "done" && { completedAt: null }),
       },
       include: {
         assignee: { select: { id: true, username: true, name: true, avatar: true } },

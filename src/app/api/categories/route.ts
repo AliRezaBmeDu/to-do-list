@@ -49,9 +49,6 @@ export async function POST(request: NextRequest) {
         color: color || "#6366f1",
         userId,
       },
-      // Include _count so the returned shape matches GET and the frontend
-      // never reads cat._count.tasks on an object that lacks it
-      include: { _count: { select: { tasks: true } } },
     });
 
     return NextResponse.json(category, { status: 201 });

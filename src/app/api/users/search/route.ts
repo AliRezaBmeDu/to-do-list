@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
     const users = await db.user.findMany({
       where: {
-        username: { contains: query, mode: "insensitive" },
+        username: { contains: query },
         id: { not: userId }, // Exclude self
       },
       select: { id: true, username: true, name: true, avatar: true },
