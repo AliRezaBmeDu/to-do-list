@@ -3,28 +3,28 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  password  String
-  name      String
-  avatar    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tasks     Task[]
+  id         String     @id @default(auto()) @map("_id") @db.ObjectId
+  username   String     @unique
+  password   String
+  name       String
+  avatar     String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  tasks      Task[]
   categories Category[]
 }
 
 model Category {
-  id        String   @id @default(cuid())
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
   name      String
   icon      String   @default("tag")
   color     String   @default("#6366f1")
-  userId    String
+  userId    String   @db.ObjectId
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tasks     Task[]
   createdAt DateTime @default(now())
@@ -34,21 +34,21 @@ model Category {
 }
 
 model Task {
-  id          String     @id @default(cuid())
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
   title       String
   description String?
-  status      String     @default("todo") // todo, in-progress, done
-  priority    String     @default("medium") // low, medium, high, urgent
-  dueDate     String?    // ISO date string
+  status      String    @default("todo")   // todo | in-progress | done
+  priority    String    @default("medium") // low | medium | high | urgent
+  dueDate     String?
   dueTime     String?
-  categoryId  String?
-  category    Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  userId      String
-  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tags        String     @default("") // comma-separated
-  isRecurring Boolean    @default(false)
-  recurRule   String?    // e.g. "daily", "weekly", "monthly"
+  categoryId  String?   @db.ObjectId
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  userId      String    @db.ObjectId
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tags        String    @default("")
+  isRecurring Boolean   @default(false)
+  recurRule   String?
   completedAt String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }

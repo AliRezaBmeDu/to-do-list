@@ -14,7 +14,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check preset users
     const preset = PRESET_USERS.find(
       (u) => u.username === username && u.password === password
     );
@@ -26,7 +25,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find or create user in DB
+    // Find or create user in MongoDB
     let user = await db.user.findUnique({ where: { username: preset.username } });
     if (!user) {
       user = await db.user.create({

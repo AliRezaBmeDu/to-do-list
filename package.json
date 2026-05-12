@@ -9,8 +9,7 @@
     "lint": "next lint",
     "db:push": "bunx prisma db push",
     "db:generate": "bunx prisma generate",
-    "db:migrate": "bunx prisma migrate dev",
-    "db:reset": "bunx prisma migrate reset"
+    "db:studio": "bunx prisma studio"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
