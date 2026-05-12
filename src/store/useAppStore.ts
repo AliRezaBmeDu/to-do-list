@@ -18,6 +18,22 @@ export type ViewMode =
 // ──────────────────────────────────────────────
 // Shared types
 // ──────────────────────────────────────────────
+interface User {
+  id: string;
+  username: string;
+  name: string;
+  avatar: string | null;
+}
+
+interface TaskComment {
+  id: string;
+  taskId: string;
+  userId: string;
+  content: string;
+  createdAt: string;
+  user: User;
+}
+
 interface Task {
   id: string;
   title: string;
@@ -34,6 +50,7 @@ interface Task {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  comments?: TaskComment[];
 }
 
 interface Category {
@@ -42,13 +59,6 @@ interface Category {
   icon: string;
   color: string;
   _count?: { tasks: number };
-}
-
-interface User {
-  id: string;
-  username: string;
-  name: string;
-  avatar: string | null;
 }
 
 interface Friendship {
@@ -193,7 +203,11 @@ interface AppStore {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<boolean>;
-  signup: (name: string, username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  signup: (
+    name: string,
+    username: string,
+    password: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
 
@@ -210,13 +224,21 @@ interface AppStore {
   addTask: (task: Partial<Task>) => Promise<Task | null>;
   updateTask: (id: string, updates: Partial<Task>) => Promise<Task | null>;
   deleteTask: (id: string) => Promise<boolean>;
+  fetchTaskComments: (taskId: string) => Promise<TaskComment[]>;
+  addTaskComment: (
+    taskId: string,
+    content: string,
+  ) => Promise<TaskComment | null>;
 
   // Categories
   categories: Category[];
   categoriesLoading: boolean;
   fetchCategories: () => Promise<void>;
   addCategory: (cat: Partial<Category>) => Promise<Category | null>;
-  updateCategory: (id: string, updates: Partial<Category>) => Promise<Category | null>;
+  updateCategory: (
+    id: string,
+    updates: Partial<Category>,
+  ) => Promise<Category | null>;
   deleteCategory: (id: string) => Promise<boolean>;
 
   // Filters
@@ -241,33 +263,62 @@ interface AppStore {
   fetchFriends: () => Promise<void>;
   fetchPendingRequests: () => Promise<void>;
   fetchSentRequests: () => Promise<void>;
-  sendFriendRequest: (username: string) => Promise<{ ok: boolean; error?: string }>;
+  sendFriendRequest: (
+    username: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   acceptFriendRequest: (id: string) => Promise<boolean>;
   rejectFriendRequest: (id: string) => Promise<boolean>;
   removeFriend: (id: string) => Promise<boolean>;
-  searchUsers: (query: string) => Promise<(User & { friendshipStatus: string; friendshipId: string | null })[]>;
+  searchUsers: (
+    query: string,
+  ) => Promise<
+    (User & { friendshipStatus: string; friendshipId: string | null })[]
+  >;
 
   // ─── Projects ───────────────────────────────
   projects: Project[];
   projectsLoading: boolean;
   currentProject: Project | null;
   fetchProjects: () => Promise<void>;
-  createProject: (data: { name: string; description?: string; color?: string; icon?: string }) => Promise<Project | null>;
-  updateProject: (id: string, updates: Partial<Project>) => Promise<Project | null>;
+  createProject: (data: {
+    name: string;
+    description?: string;
+    color?: string;
+    icon?: string;
+  }) => Promise<Project | null>;
+  updateProject: (
+    id: string,
+    updates: Partial<Project>,
+  ) => Promise<Project | null>;
   deleteProject: (id: string) => Promise<boolean>;
   setCurrentProject: (project: Project | null) => void;
   fetchProjectDetail: (id: string) => Promise<Project | null>;
-  inviteMember: (projectId: string, username: string, role?: string) => Promise<boolean>;
+  inviteMember: (
+    projectId: string,
+    username: string,
+    role?: string,
+  ) => Promise<boolean>;
   removeMember: (projectId: string, memberId: string) => Promise<boolean>;
-  updateMemberRole: (projectId: string, memberId: string, role: string) => Promise<boolean>;
+  updateMemberRole: (
+    projectId: string,
+    memberId: string,
+    role: string,
+  ) => Promise<boolean>;
   leaveProject: (projectId: string, memberId: string) => Promise<boolean>;
 
   // ─── Project Tasks ──────────────────────────
   projectTasks: ProjectTask[];
   projectTasksLoading: boolean;
   fetchProjectTasks: (projectId: string) => Promise<void>;
-  addProjectTask: (projectId: string, data: Partial<ProjectTask>) => Promise<ProjectTask | null>;
-  updateProjectTask: (projectId: string, taskId: string, updates: Partial<ProjectTask>) => Promise<ProjectTask | null>;
+  addProjectTask: (
+    projectId: string,
+    data: Partial<ProjectTask>,
+  ) => Promise<ProjectTask | null>;
+  updateProjectTask: (
+    projectId: string,
+    taskId: string,
+    updates: Partial<ProjectTask>,
+  ) => Promise<ProjectTask | null>;
   deleteProjectTask: (projectId: string, taskId: string) => Promise<boolean>;
 
   // ─── Posts / Feed ───────────────────────────
@@ -286,7 +337,10 @@ interface AppStore {
   chatMessagesLoading: boolean;
   fetchConversations: () => Promise<void>;
   fetchChatMessages: (friendId: string) => Promise<void>;
-  sendMessage: (friendId: string, content: string) => Promise<MessageItem | null>;
+  sendMessage: (
+    friendId: string,
+    content: string,
+  ) => Promise<MessageItem | null>;
   setCurrentChatFriend: (friend: User | null) => void;
 
   // ─── Video Calls ────────────────────────────
@@ -294,7 +348,11 @@ interface AppStore {
   videoCallsLoading: boolean;
   activeCall: VideoCall | null;
   fetchVideoCalls: () => Promise<void>;
-  createVideoCall: (data: { title: string; scheduledAt?: string; participantIds: string[] }) => Promise<VideoCall | null>;
+  createVideoCall: (data: {
+    title: string;
+    scheduledAt?: string;
+    participantIds: string[];
+  }) => Promise<VideoCall | null>;
   joinVideoCall: (callId: string) => Promise<boolean>;
   endVideoCall: (callId: string) => Promise<boolean>;
   setActiveCall: (call: VideoCall | null) => void;
@@ -341,12 +399,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
   logout: async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     set({
-      user: null, isAuthenticated: false, tasks: [], categories: [],
-      friends: [], projects: [], projectTasks: [], currentProject: null,
-      posts: [], conversations: [], chatMessages: [], currentChatFriend: null,
-      // social state — must be cleared so a subsequent login never sees stale data
-      pendingRequests: [], sentRequests: [],
-      videoCalls: [], activeCall: null,
+      user: null,
+      isAuthenticated: false,
+      tasks: [],
+      categories: [],
+      friends: [],
+      projects: [],
+      projectTasks: [],
+      currentProject: null,
+      posts: [],
+      conversations: [],
+      chatMessages: [],
+      currentChatFriend: null,
+      pendingRequests: [],
+      sentRequests: [],
+      videoCalls: [],
+      activeCall: null,
     });
   },
 
@@ -431,6 +499,46 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return true;
     } catch {
       return false;
+    }
+  },
+
+  fetchTaskComments: async (taskId) => {
+    try {
+      const res = await fetch(`/api/comments?taskId=${taskId}`);
+      if (!res.ok) return [];
+      const comments = await res.json();
+
+      set((s) => ({
+        tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, comments } : t)),
+      }));
+
+      return comments;
+    } catch {
+      return [];
+    }
+  },
+
+  addTaskComment: async (taskId, content) => {
+    try {
+      const res = await fetch("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, content }),
+      });
+      if (!res.ok) return null;
+      const newComment = await res.json();
+
+      set((s) => ({
+        tasks: s.tasks.map((t) => {
+          if (t.id !== taskId) return t;
+          const existingComments = t.comments || [];
+          return { ...t, comments: [...existingComments, newComment] };
+        }),
+      }));
+
+      return newComment;
+    } catch {
+      return null;
     }
   },
 
@@ -555,7 +663,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
         body: JSON.stringify({ username }),
       });
       const data = await res.json();
-      if (!res.ok) return { ok: false, error: data.error ?? "Failed to send request" };
+      if (!res.ok)
+        return { ok: false, error: data.error ?? "Failed to send request" };
       get().fetchSentRequests();
       return { ok: true };
     } catch {
@@ -599,7 +708,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   searchUsers: async (query) => {
     try {
-      const res = await fetch(`/api/users/search?q=${encodeURIComponent(query)}`);
+      const res = await fetch(
+        `/api/users/search?q=${encodeURIComponent(query)}`,
+      );
       if (res.ok) return await res.json();
       return [];
     } catch {
@@ -654,7 +765,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const updated = await res.json();
       set((s) => ({
         projects: s.projects.map((p) => (p.id === id ? updated : p)),
-        currentProject: s.currentProject?.id === id ? { ...updated, myRole: s.currentProject.myRole } : s.currentProject,
+        currentProject:
+          s.currentProject?.id === id
+            ? { ...updated, myRole: s.currentProject.myRole }
+            : s.currentProject,
       }));
       return updated;
     } catch {
@@ -709,9 +823,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   removeMember: async (projectId, memberId) => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/members/${memberId}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(
+        `/api/projects/${projectId}/members/${memberId}`,
+        {
+          method: "DELETE",
+        },
+      );
       if (!res.ok) return false;
       get().fetchProjectDetail(projectId);
       get().fetchProjects();
@@ -723,11 +840,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   updateMemberRole: async (projectId, memberId, role) => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/members/${memberId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
+      const res = await fetch(
+        `/api/projects/${projectId}/members/${memberId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role }),
+        },
+      );
       if (!res.ok) return false;
       get().fetchProjectDetail(projectId);
       return true;
@@ -738,13 +858,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   leaveProject: async (projectId, memberId) => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/members/${memberId}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(
+        `/api/projects/${projectId}/members/${memberId}`,
+        {
+          method: "DELETE",
+        },
+      );
       if (!res.ok) return false;
       set((s) => ({
         projects: s.projects.filter((p) => p.id !== projectId),
-        currentProject: s.currentProject?.id === projectId ? null : s.currentProject,
+        currentProject:
+          s.currentProject?.id === projectId ? null : s.currentProject,
         projectTasks: s.currentProject?.id === projectId ? [] : s.projectTasks,
       }));
       return true;
@@ -798,7 +922,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!res.ok) return null;
       const updated = await res.json();
       set((s) => ({
-        projectTasks: s.projectTasks.map((t) => (t.id === taskId ? updated : t)),
+        projectTasks: s.projectTasks.map((t) =>
+          t.id === taskId ? updated : t,
+        ),
       }));
       return updated;
     } catch {
@@ -812,7 +938,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         method: "DELETE",
       });
       if (!res.ok) return false;
-      set((s) => ({ projectTasks: s.projectTasks.filter((t) => t.id !== taskId) }));
+      set((s) => ({
+        projectTasks: s.projectTasks.filter((t) => t.id !== taskId),
+      }));
       return true;
     } catch {
       return false;
@@ -860,20 +988,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
       const res = await fetch(`/api/posts/${postId}/like`, { method: "POST" });
       if (!res.ok) return false;
       const data = await res.json();
-      // Optimistically update local state
       set((s) => ({
         posts: s.posts.map((p) => {
           if (p.id !== postId) return p;
           if (data.liked) {
-            // Add like
             const alreadyLiked = p.likes.some((l) => l.userId === userId);
             if (alreadyLiked) return p;
             return {
               ...p,
-              likes: [...p.likes, { id: `temp-${Date.now()}`, postId, userId: userId!, user: get().user!, createdAt: new Date().toISOString() }],
+              likes: [
+                ...p.likes,
+                {
+                  id: `temp-${Date.now()}`,
+                  postId,
+                  userId: userId!,
+                  user: get().user!,
+                  createdAt: new Date().toISOString(),
+                },
+              ],
             };
           } else {
-            // Remove like
             return { ...p, likes: p.likes.filter((l) => l.userId !== userId) };
           }
         }),
@@ -934,7 +1068,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (res.ok) {
         const chatMessages = await res.json();
         set({ chatMessages, chatMessagesLoading: false });
-        // Refresh conversations to clear unread count
         get().fetchConversations();
       } else {
         set({ chatMessagesLoading: false });
@@ -954,7 +1087,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!res.ok) return null;
       const message = await res.json();
       set((s) => ({ chatMessages: [...s.chatMessages, message] }));
-      // Refresh conversations to update last message
       get().fetchConversations();
       return message;
     } catch {
@@ -1002,7 +1134,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   joinVideoCall: async (callId) => {
     try {
-      const res = await fetch(`/api/videocalls/${callId}/join`, { method: "PUT" });
+      const res = await fetch(`/api/videocalls/${callId}/join`, {
+        method: "PUT",
+      });
       if (!res.ok) return false;
       get().fetchVideoCalls();
       return true;
@@ -1013,7 +1147,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   endVideoCall: async (callId) => {
     try {
-      const res = await fetch(`/api/videocalls/${callId}/end`, { method: "PUT" });
+      const res = await fetch(`/api/videocalls/${callId}/end`, {
+        method: "PUT",
+      });
       if (!res.ok) return false;
       set({ activeCall: null });
       get().fetchVideoCalls();
