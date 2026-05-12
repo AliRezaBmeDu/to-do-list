@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { PRESET_USERS, setSessionCookie } from "@/lib/auth";
+import { setSessionCookie, verifyPassword } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,29 +14,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check preset users
-    const preset = PRESET_USERS.find(
-      (u) => u.username === username && u.password === password
-    );
+    const user = await db.user.findUnique({ where: { username } });
 
-    if (!preset) {
+    if (!user) {
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
       );
     }
 
-    // Find or create user in DB
-    let user = await db.user.findUnique({ where: { username: preset.username } });
-    if (!user) {
-      user = await db.user.create({
-        data: {
-          username: preset.username,
-          password: preset.password,
-          name: preset.name,
-          avatar: preset.avatar,
-        },
-      });
+    // Support both legacy plain-text and new hashed passwords
+    let valid = false;
+    if (user.password.startsWith("$2a$") || user.password.startsWith("$2b$")) {
+      valid = await verifyPassword(password, user.password);
+    } else {
+      // Legacy plain-text comparison (migrate on next login)
+      valid = user.password === password;
+    }
+
+    if (!valid) {
+      return NextResponse.json(
+        { error: "Invalid username or password" },
+        { status: 401 }
+      );
+    }
+
+    // Auto-migrate legacy plain-text passwords to bcrypt
+    if (!user.password.startsWith("$2a$") && !user.password.startsWith("$2b$")) {
+      const { hashPassword } = await import("@/lib/auth");
+      const hashed = await hashPassword(password);
+      await db.user.update({ where: { id: user.id }, data: { password: hashed } });
     }
 
     await setSessionCookie(user.id);

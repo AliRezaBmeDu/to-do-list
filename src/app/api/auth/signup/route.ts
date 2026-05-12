@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { setSessionCookie, MAX_USERS } from "@/lib/auth";
+import { setSessionCookie, hashPassword } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,15 +28,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Enforce 10-user limit
-    const userCount = await db.user.count();
-    if (userCount >= MAX_USERS) {
-      return NextResponse.json(
-        { error: "Registration is closed. The maximum number of users (10) has been reached." },
-        { status: 403 }
-      );
-    }
-
     // Check if username is taken
     const existing = await db.user.findUnique({ where: { username } });
     if (existing) {
@@ -47,9 +38,10 @@ export async function POST(request: NextRequest) {
     }
 
     const avatar = name.charAt(0).toUpperCase();
+    const hashedPassword = await hashPassword(password);
 
     const user = await db.user.create({
-      data: { username, password, name, avatar },
+      data: { username, password: hashedPassword, name, avatar },
     });
 
     await setSessionCookie(user.id);
@@ -69,15 +61,5 @@ export async function POST(request: NextRequest) {
       { error: "Internal server error" },
       { status: 500 }
     );
-  }
-}
-
-// GET: return current user count (so the UI can warn when slots are filling up)
-export async function GET() {
-  try {
-    const count = await db.user.count();
-    return NextResponse.json({ count, max: MAX_USERS, spotsLeft: MAX_USERS - count });
-  } catch {
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -33,12 +33,10 @@ export async function PUT(
         ...(body.tags !== undefined && { tags: body.tags }),
         ...(body.isRecurring !== undefined && { isRecurring: body.isRecurring }),
         ...(body.recurRule !== undefined && { recurRule: body.recurRule || null }),
-        ...(body.projectId !== undefined && { projectId: body.projectId || null }),
-        ...(body.assigneeId !== undefined && { assigneeId: body.assigneeId || null }),
         ...(body.status === "done" && !existing.completedAt && { completedAt: new Date().toISOString() }),
         ...(body.status !== "done" && { completedAt: null }),
       },
-      include: { category: true, assignee: { select: { id: true, name: true, username: true, avatar: true } } },
+      include: { category: true },
     });
 
     return NextResponse.json(task);

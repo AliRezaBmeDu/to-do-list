@@ -44,8 +44,6 @@ export async function POST(request: NextRequest) {
       tags,
       isRecurring,
       recurRule,
-      projectId,
-      assigneeId,
     } = body;
 
     if (!title?.trim()) {
@@ -67,11 +65,9 @@ export async function POST(request: NextRequest) {
         tags: tags || "",
         isRecurring: isRecurring || false,
         recurRule: recurRule || null,
-        projectId: projectId || null,
-        assigneeId: assigneeId || null,
         userId,
       },
-      include: { category: true, assignee: { select: { id: true, name: true, username: true, avatar: true } } },
+      include: { category: true },
     });
 
     return NextResponse.json(task, { status: 201 });
