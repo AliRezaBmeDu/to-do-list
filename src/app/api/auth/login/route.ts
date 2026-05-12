@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { PRESET_USERS, setSessionCookie } from "@/lib/auth";
+import { setSessionCookie } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,28 +14,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const preset = PRESET_USERS.find(
-      (u) => u.username === username && u.password === password
-    );
+    const user = await db.user.findUnique({ where: { username } });
 
-    if (!preset) {
+    if (!user || user.password !== password) {
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
       );
-    }
-
-    // Find or create user in MongoDB
-    let user = await db.user.findUnique({ where: { username: preset.username } });
-    if (!user) {
-      user = await db.user.create({
-        data: {
-          username: preset.username,
-          password: preset.password,
-          name: preset.name,
-          avatar: preset.avatar,
-        },
-      });
     }
 
     await setSessionCookie(user.id);

@@ -51,12 +51,84 @@ const statusConfig: Record<string, { label: string; color: string; icon: React.E
 };
 
 /* ═══════════ LOGIN PAGE ═══════════ */
+/* ═══════════ SIGN UP PAGE ═══════════ */
+function SignupPage({ onBack }: { onBack: () => void }) {
+  const signup = useAppStore((s) => s.signup);
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (password !== confirm) { setError("Passwords do not match"); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+    if (username.length < 3) { setError("Username must be at least 3 characters"); return; }
+    setLoading(true);
+    const result = await signup(name.trim(), username.trim(), password);
+    if (!result.ok) setError(result.error ?? "Sign up failed");
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-4">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
+        <Card className="border-0 shadow-2xl">
+          <CardHeader className="text-center pb-2">
+            <div className="mx-auto w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
+              <Sparkles className="w-8 h-8 text-white" />
+            </div>
+            <CardTitle className="text-2xl font-bold">Create Account</CardTitle>
+            <p className="text-muted-foreground text-sm mt-1">Join TaskFlow Pro — limited to 10 users</p>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="su-name">Full Name</Label>
+                <Input id="su-name" placeholder="Your display name" value={name} onChange={(e) => setName(e.target.value)} className="h-11" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="su-username">Username</Label>
+                <Input id="su-username" placeholder="At least 3 characters" value={username} onChange={(e) => setUsername(e.target.value)} className="h-11" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="su-password">Password</Label>
+                <Input id="su-password" type="password" placeholder="At least 6 characters" value={password} onChange={(e) => setPassword(e.target.value)} className="h-11" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="su-confirm">Confirm Password</Label>
+                <Input id="su-confirm" type="password" placeholder="Repeat your password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="h-11" required />
+              </div>
+              {error && <p className="text-sm text-red-500 dark:text-red-400 text-center">{error}</p>}
+              <Button type="submit" className="w-full h-11 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700" disabled={loading}>
+                {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Create Account
+              </Button>
+            </form>
+            <div className="mt-4 text-center">
+              <button type="button" onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                ← Back to Sign In
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    </div>
+  );
+}
+
+/* ═══════════ LOGIN PAGE ═══════════ */
 function LoginPage() {
   const login = useAppStore((s) => s.login);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showSignup, setShowSignup] = useState(false);
+
+  if (showSignup) return <SignupPage onBack={() => setShowSignup(false)} />;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,19 +164,10 @@ function LoginPage() {
               <Button type="submit" className="w-full h-11 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700" disabled={loading}>
                 {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Sign In
               </Button>
+              <Button type="button" variant="outline" className="w-full h-11" onClick={() => setShowSignup(true)}>
+                Create an Account
+              </Button>
             </form>
-            <div className="mt-6 pt-4 border-t">
-              <p className="text-xs text-muted-foreground text-center mb-3">Demo Credentials</p>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { user: "admin", pass: "admin123", label: "Admin" },
-                  { user: "dev", pass: "dev123", label: "Developer" },
-                  { user: "business", pass: "biz123", label: "Business" },
-                ].map((c) => (
-                  <button key={c.user} type="button" onClick={() => { setUsername(c.user); setPassword(c.pass); }} className="text-xs px-3 py-2 rounded-lg border hover:bg-accent transition-colors">{c.label}</button>
-                ))}
-              </div>
-            </div>
           </CardContent>
         </Card>
       </motion.div>

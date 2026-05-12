@@ -3,12 +3,7 @@ import { db } from "@/lib/db";
 
 const SESSION_COOKIE = "todo_session";
 
-// Preset users
-export const PRESET_USERS = [
-  { username: "admin", password: "admin123", name: "Admin User", avatar: "A" },
-  { username: "dev", password: "dev123", name: "Developer", avatar: "D" },
-  { username: "business", password: "biz123", name: "Business Pro", avatar: "B" },
-];
+export const MAX_USERS = 10;
 
 export async function getSessionUserId(): Promise<string | null> {
   const cookieStore = await cookies();

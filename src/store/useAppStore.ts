@@ -41,6 +41,7 @@ interface AppStore {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<boolean>;
+  signup: (name: string, username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
 
@@ -81,7 +82,7 @@ interface AppStore {
   setSelectedDate: (d: string | null) => void;
 }
 
-export const useAppStore = create<AppStore>((set, get) => ({
+export const useAppStore = create<AppStore>((set) => ({
   // Auth
   user: null,
   isAuthenticated: false,
@@ -100,6 +101,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
       return true;
     } catch {
       return false;
+    }
+  },
+
+  signup: async (name, username, password) => {
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, username, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error ?? "Sign up failed" };
+      set({ user: data, isAuthenticated: true });
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Network error. Please try again." };
     }
   },
 
