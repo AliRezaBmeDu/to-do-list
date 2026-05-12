@@ -10,12 +10,12 @@ export async function GET(request: NextRequest) {
     const search = request.nextUrl.searchParams.get("q") || "";
 
     // Get existing friend relationships
-    const existing = await db.friendRequest.findMany({
-      where: { OR: [{ senderId: userId }, { receiverId: userId }], status: { in: ["pending", "accepted"] } },
-      select: { senderId: true, receiverId: true, status: true },
+    const existing = await db.friendship.findMany({
+      where: { OR: [{ requesterId: userId }, { addresseeId: userId }], status: { in: ["pending", "accepted"] } },
+      select: { requesterId: true, addresseeId: true, status: true },
     });
     const relatedIds = new Set<string>();
-    existing.forEach((r) => { relatedIds.add(r.senderId); relatedIds.add(r.receiverId); });
+    existing.forEach((r) => { relatedIds.add(r.requesterId); relatedIds.add(r.addresseeId); });
     relatedIds.add(userId);
 
     const users = await db.user.findMany({
@@ -28,11 +28,11 @@ export async function GET(request: NextRequest) {
     });
 
     // Also get pending requests sent/received
-    const pending = await db.friendRequest.findMany({
-      where: { OR: [{ senderId: userId }, { receiverId: userId }], status: "pending" },
+    const pending = await db.friendship.findMany({
+      where: { OR: [{ requesterId: userId }, { addresseeId: userId }], status: "pending" },
       include: {
-        sender: { select: { id: true, name: true, username: true, avatar: true } },
-        receiver: { select: { id: true, name: true, username: true, avatar: true } },
+        requester: { select: { id: true, name: true, username: true, avatar: true } },
+        addressee: { select: { id: true, name: true, username: true, avatar: true } },
       },
     });
 

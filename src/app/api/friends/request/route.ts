@@ -8,14 +8,14 @@ export async function POST(request: NextRequest) {
     if (!userId)
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-    // Assuming your frontend is sending `{ receiverId: string }`
-    const { receiverId } = await request.json();
-    if (!receiverId)
+    // Frontend sends { addresseeId: string }
+    const { addresseeId } = await request.json();
+    if (!addresseeId)
       return NextResponse.json(
-        { error: "receiverId required" },
+        { error: "addresseeId required" },
         { status: 400 },
       );
-    if (receiverId === userId)
+    if (addresseeId === userId)
       return NextResponse.json(
         { error: "Cannot friend yourself" },
         { status: 400 },
@@ -25,8 +25,8 @@ export async function POST(request: NextRequest) {
     const existing = await db.friendship.findFirst({
       where: {
         OR: [
-          { requesterId: userId, addresseeId: receiverId },
-          { requesterId: receiverId, addresseeId: userId },
+          { requesterId: userId, addresseeId: addresseeId },
+          { requesterId: addresseeId, addresseeId: userId },
         ],
         status: { in: ["pending", "accepted"] },
       },
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       );
 
     const req = await db.friendship.create({
-      data: { requesterId: userId, addresseeId: receiverId },
+      data: { requesterId: userId, addresseeId: addresseeId },
       include: {
         requester: {
           select: { id: true, name: true, username: true, avatar: true },

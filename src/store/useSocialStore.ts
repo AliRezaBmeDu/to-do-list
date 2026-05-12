@@ -9,13 +9,13 @@ interface FriendUser {
   avatar: string | null;
 }
 
-interface FriendRequestType {
+interface FriendshipType {
   id: string;
-  senderId: string;
-  receiverId: string;
+  requesterId: string;
+  addresseeId: string;
   status: string;
-  sender?: FriendUser;
-  receiver?: FriendUser;
+  requester?: FriendUser;
+  addressee?: FriendUser;
   createdAt: string;
 }
 
@@ -63,11 +63,11 @@ interface NotificationType {
 interface SocialStore {
   // Friends
   friends: FriendUser[];
-  pendingRequests: FriendRequestType[];
+  pendingRequests: FriendshipType[];
   discoverUsers: FriendUser[];
   friendsLoading: boolean;
   fetchFriendsData: () => Promise<void>;
-  sendFriendRequest: (receiverId: string) => Promise<boolean>;
+  sendFriendRequest: (addresseeId: string) => Promise<boolean>;
   acceptFriendRequest: (requestId: string) => Promise<boolean>;
   rejectFriendRequest: (requestId: string) => Promise<boolean>;
 
@@ -120,9 +120,9 @@ export const useSocialStore = create<SocialStore>((set, get) => ({
     set({ friendsLoading: false });
   },
 
-  sendFriendRequest: async (receiverId) => {
+  sendFriendRequest: async (addresseeId) => {
     try {
-      const res = await fetch("/api/friends/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiverId }) });
+      const res = await fetch("/api/friends/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addresseeId }) });
       if (!res.ok) return false;
       await get().fetchFriendsData();
       return true;

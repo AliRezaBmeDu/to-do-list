@@ -20,9 +20,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
-    await db.friendship.update({
+    await db.friendship.delete({
       where: { id: requestId },
-      data: { status: "rejected" },
     });
     return NextResponse.json({ success: true });
   } catch (error) {

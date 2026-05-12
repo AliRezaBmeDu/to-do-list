@@ -42,6 +42,12 @@ model User {
   // Video Calls
   hostedCalls    VideoCall[] @relation("HostedCalls")
   invitedCalls   VideoCallParticipant[]
+
+  // Comments (task-level)
+  taskComments   Comment[]
+
+  // Notifications
+  notifications  Notification[]
 }
 
 model Category {
@@ -234,4 +240,31 @@ model VideoCallParticipant {
   joinedAt  String?
 
   @@unique([callId, userId])
+}
+
+// ──────────────────────────────────────────────
+// COMMENT - Task-level comments (project collaboration)
+// ──────────────────────────────────────────────
+model Comment {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  taskId    String   @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+}
+
+// ──────────────────────────────────────────────
+// NOTIFICATION - In-app notifications
+// ──────────────────────────────────────────────
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String                          // friend_request | project_invite | task_assigned | etc.
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  linkId    String?                         // Optional ID to link to the related entity
+  createdAt DateTime @default(now())
 }
