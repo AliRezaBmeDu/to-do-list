@@ -5,37 +5,53 @@ import { getSessionUserId } from "@/lib/auth";
 export async function POST(request: NextRequest) {
   try {
     const userId = await getSessionUserId();
-    if (!userId) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    if (!userId)
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
+    // Assuming your frontend is sending `{ receiverId: string }`
     const { receiverId } = await request.json();
-    if (!receiverId) return NextResponse.json({ error: "receiverId required" }, { status: 400 });
-    if (receiverId === userId) return NextResponse.json({ error: "Cannot friend yourself" }, { status: 400 });
+    if (!receiverId)
+      return NextResponse.json(
+        { error: "receiverId required" },
+        { status: 400 },
+      );
+    if (receiverId === userId)
+      return NextResponse.json(
+        { error: "Cannot friend yourself" },
+        { status: 400 },
+      );
 
-    // Check if request already exists
-    const existing = await db.friendRequest.findFirst({
+    // Check if request already exists (either direction)
+    const existing = await db.friendship.findFirst({
       where: {
         OR: [
-          { senderId: userId, receiverId },
-          { senderId: receiverId, receiverId: userId },
+          { requesterId: userId, addresseeId: receiverId },
+          { requesterId: receiverId, addresseeId: userId },
         ],
         status: { in: ["pending", "accepted"] },
       },
     });
-    if (existing) return NextResponse.json({ error: "Request already exists" }, { status: 409 });
+    if (existing)
+      return NextResponse.json(
+        { error: "Request already exists" },
+        { status: 409 },
+      );
 
-    const req = await db.friendRequest.create({
-      data: { senderId: userId, receiverId },
-      include: { sender: { select: { id: true, name: true, username: true, avatar: true } } },
-    });
-
-    // Create notification
-    await db.notification.create({
-      data: { userId: receiverId, type: "friend_request", title: "Friend Request", body: `${req.sender.name} sent you a friend request`, linkId: req.id },
+    const req = await db.friendship.create({
+      data: { requesterId: userId, addresseeId: receiverId },
+      include: {
+        requester: {
+          select: { id: true, name: true, username: true, avatar: true },
+        },
+      },
     });
 
     return NextResponse.json(req, { status: 201 });
   } catch (error) {
     console.error("Friend request error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }
