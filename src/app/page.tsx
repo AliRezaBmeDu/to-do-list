@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { useAppStore, ViewMode } from "@/store/useAppStore";
+import { useSocialStore } from "@/store/useSocialStore";
 import { format, isToday, isTomorrow, isYesterday, isSameMonth, parseISO, isValid, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -10,7 +11,9 @@ import {
   MoreHorizontal, Trash2, Edit3, Loader2,
   Sun, Moon, Menu, Code, Bug, Users, Briefcase, Heart, Activity,
   BookOpen, MessageCircle, Tag, TrendingUp, CheckCircle2, Circle,
-  Timer, ArrowUpRight, ArrowDownRight, Sparkles
+  Timer, ArrowUpRight, ArrowDownRight, Sparkles,
+  UserPlus, UserMinus, Send, Bell, MessageSquare, FolderKanban,
+  UserCheck, UserX, Eye, ArrowRight
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,84 +54,12 @@ const statusConfig: Record<string, { label: string; color: string; icon: React.E
 };
 
 /* ═══════════ LOGIN PAGE ═══════════ */
-/* ═══════════ SIGN UP PAGE ═══════════ */
-function SignupPage({ onBack }: { onBack: () => void }) {
-  const signup = useAppStore((s) => s.signup);
-  const [name, setName] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (password !== confirm) { setError("Passwords do not match"); return; }
-    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
-    if (username.length < 3) { setError("Username must be at least 3 characters"); return; }
-    setLoading(true);
-    const result = await signup(name.trim(), username.trim(), password);
-    if (!result.ok) setError(result.error ?? "Sign up failed");
-    setLoading(false);
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 p-4">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
-        <Card className="border-0 shadow-2xl">
-          <CardHeader className="text-center pb-2">
-            <div className="mx-auto w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg">
-              <Sparkles className="w-8 h-8 text-white" />
-            </div>
-            <CardTitle className="text-2xl font-bold">Create Account</CardTitle>
-            <p className="text-muted-foreground text-sm mt-1">Join TaskFlow Pro — limited to 10 users</p>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="su-name">Full Name</Label>
-                <Input id="su-name" placeholder="Your display name" value={name} onChange={(e) => setName(e.target.value)} className="h-11" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="su-username">Username</Label>
-                <Input id="su-username" placeholder="At least 3 characters" value={username} onChange={(e) => setUsername(e.target.value)} className="h-11" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="su-password">Password</Label>
-                <Input id="su-password" type="password" placeholder="At least 6 characters" value={password} onChange={(e) => setPassword(e.target.value)} className="h-11" required />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="su-confirm">Confirm Password</Label>
-                <Input id="su-confirm" type="password" placeholder="Repeat your password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="h-11" required />
-              </div>
-              {error && <p className="text-sm text-red-500 dark:text-red-400 text-center">{error}</p>}
-              <Button type="submit" className="w-full h-11 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700" disabled={loading}>
-                {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Create Account
-              </Button>
-            </form>
-            <div className="mt-4 text-center">
-              <button type="button" onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                ← Back to Sign In
-              </button>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
-  );
-}
-
-/* ═══════════ LOGIN PAGE ═══════════ */
 function LoginPage() {
   const login = useAppStore((s) => s.login);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showSignup, setShowSignup] = useState(false);
-
-  if (showSignup) return <SignupPage onBack={() => setShowSignup(false)} />;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,10 +95,19 @@ function LoginPage() {
               <Button type="submit" className="w-full h-11 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700" disabled={loading}>
                 {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null} Sign In
               </Button>
-              <Button type="button" variant="outline" className="w-full h-11" onClick={() => setShowSignup(true)}>
-                Create an Account
-              </Button>
             </form>
+            <div className="mt-6 pt-4 border-t">
+              <p className="text-xs text-muted-foreground text-center mb-3">Demo Credentials</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { user: "admin", pass: "admin123", label: "Admin" },
+                  { user: "dev", pass: "dev123", label: "Developer" },
+                  { user: "business", pass: "biz123", label: "Business" },
+                ].map((c) => (
+                  <button key={c.user} type="button" onClick={() => { setUsername(c.user); setPassword(c.pass); }} className="text-xs px-3 py-2 rounded-lg border hover:bg-accent transition-colors">{c.label}</button>
+                ))}
+              </div>
+            </div>
           </CardContent>
         </Card>
       </motion.div>
@@ -184,9 +124,12 @@ function SidebarNav({ onNavClose }: { onNavClose?: () => void }) {
     { id: "tasks", label: "Task List", icon: List },
     { id: "monthly", label: "Monthly View", icon: TrendingUp },
     { id: "calendar", label: "Calendar", icon: CalendarDays },
+    { id: "projects", label: "Projects", icon: FolderKanban },
+    { id: "friends", label: "Friends", icon: Users },
     { id: "categories", label: "Categories", icon: Tags },
   ];
   const pendingTasks = tasks.filter((t) => t.status !== "done").length;
+  const { unreadCount } = useSocialStore();
 
   return (
     <div className="flex flex-col h-full">
@@ -301,8 +244,8 @@ function TaskCard({ task, onEdit, onToggleDone, onDelete }: { task: any; onEdit:
 }
 
 /* ═══════════ TASK FORM (inner - remounts via key) ═══════════ */
-function TaskFormInner({ editTask, categories, onSave, onCancel }: {
-  editTask?: any; categories: any[]; onSave: (data: any) => Promise<void>; onCancel: () => void;
+function TaskFormInner({ editTask, categories, onSave, onCancel, projectId, members }: {
+  editTask?: any; categories: any[]; onSave: (data: any) => Promise<void>; onCancel: () => void; projectId?: string; members?: any[];
 }) {
   const [title, setTitle] = useState(editTask?.title || "");
   const [description, setDescription] = useState(editTask?.description || "");
@@ -314,6 +257,7 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: {
   const [tags, setTags] = useState(editTask?.tags || "");
   const [isRecurring, setIsRecurring] = useState(editTask?.isRecurring || false);
   const [recurRule, setRecurRule] = useState(editTask?.recurRule || "");
+  const [assigneeId, setAssigneeId] = useState(editTask?.assigneeId || "none");
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -323,6 +267,8 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: {
       title, description, status, priority, dueDate: dueDate || null,
       dueTime: dueTime || null, categoryId: categoryId === "none" ? null : categoryId || null,
       tags, isRecurring, recurRule: recurRule || null,
+      ...(projectId ? { projectId } : {}),
+      ...(assigneeId !== "none" ? { assigneeId } : {}),
     });
     setSaving(false);
   };
@@ -381,6 +327,20 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: {
         </Select>
       </div>
       <div className="space-y-2"><Label>Tags (comma-separated)</Label><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="e.g. backend, urgent, meeting" className="h-10" /></div>
+      {members && members.length > 0 && (
+        <div className="space-y-2">
+          <Label>Assign To</Label>
+          <Select value={assigneeId} onValueChange={setAssigneeId}>
+            <SelectTrigger><SelectValue placeholder="Assign to member" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Unassigned</SelectItem>
+              {members.map((m: any) => (
+                <SelectItem key={m.userId} value={m.userId}>{m.user?.name || "Unknown"}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div className="flex items-center gap-3"><Switch checked={isRecurring} onCheckedChange={setIsRecurring} /><Label>Recurring Task</Label></div>
       {isRecurring && (
         <div className="space-y-2">
@@ -406,7 +366,7 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: {
 }
 
 /* ═══════════ TASK FORM DIALOG (wrapper) ═══════════ */
-function TaskFormDialog({ open, onOpenChange, editTask }: { open: boolean; onOpenChange: (o: boolean) => void; editTask?: any }) {
+function TaskFormDialog({ open, onOpenChange, editTask, projectId, members }: { open: boolean; onOpenChange: (o: boolean) => void; editTask?: any; projectId?: string; members?: any[] }) {
   const { addTask, updateTask, categories } = useAppStore();
   const dialogKey = `${editTask?.id || "new"}-${open ? "open" : "closed"}`;
 
@@ -425,7 +385,7 @@ function TaskFormDialog({ open, onOpenChange, editTask }: { open: boolean; onOpe
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{editTask ? "Edit Task" : "Create New Task"}</DialogTitle></DialogHeader>
-        {open && <TaskFormInner key={dialogKey} editTask={editTask} categories={categories} onSave={handleSave} onCancel={() => onOpenChange(false)} />}
+        {open && <TaskFormInner key={dialogKey} editTask={editTask} categories={categories} onSave={handleSave} onCancel={() => onOpenChange(false)} projectId={projectId} members={members} />}
       </DialogContent>
     </Dialog>
   );
@@ -897,6 +857,349 @@ function CategoriesView() {
   );
 }
 
+/* ═══════════ FRIENDS VIEW ═══════════ */
+function FriendsView() {
+  const { friends, pendingRequests, discoverUsers, friendsLoading, fetchFriendsData, sendFriendRequest, acceptFriendRequest, rejectFriendRequest } = useSocialStore();
+  const [tab, setTab] = useState<"friends" | "requests" | "discover">("friends");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => { fetchFriendsData(); }, [fetchFriendsData]);
+
+  const filteredDiscover = search ? discoverUsers.filter((u) => u.name.toLowerCase().includes(search.toLowerCase()) || u.username.toLowerCase().includes(search.toLowerCase())) : discoverUsers;
+
+  return (
+    <div className="space-y-4">
+      <div><h1 className="text-xl font-bold">Friends</h1><p className="text-sm text-muted-foreground">Manage your connections</p></div>
+      <div className="flex gap-2">
+        {(["friends", "requests", "discover"] as const).map((t) => {
+          const cfg = { friends: { label: "Friends", count: friends.length }, requests: { label: "Requests", count: pendingRequests.length }, discover: { label: "Discover", count: 0 } };
+          return (
+            <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${tab === t ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-md" : "bg-muted hover:bg-accent"}`}>
+              {cfg[t].label} {cfg[t].count > 0 && <span className="ml-1 text-xs opacity-80">({cfg[t].count})</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "discover" && (
+        <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><Input placeholder="Search users..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
+      )}
+
+      <ScrollArea className="h-[calc(100vh-300px)]">
+        {friendsLoading ? (
+          <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
+        ) : tab === "friends" ? (
+          friends.length === 0 ? <div className="text-center py-12 text-muted-foreground"><Users className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>No friends yet. Discover users to connect!</p></div> : (
+            <div className="space-y-2">
+              {friends.map((f) => (
+                <div key={f.id} className="flex items-center gap-3 p-3 rounded-xl border hover:shadow-sm transition-all">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white font-bold">{(f.avatar || f.name[0])}</div>
+                  <div className="flex-1 min-w-0"><p className="font-medium text-sm">{f.name}</p><p className="text-[10px] text-muted-foreground">@{f.username}</p></div>
+                  <Badge variant="secondary" className="text-[10px] border-0"><UserCheck className="w-3 h-3 mr-1" />Friends</Badge>
+                </div>
+              ))}
+            </div>
+          )
+        ) : tab === "requests" ? (
+          pendingRequests.length === 0 ? <div className="text-center py-12 text-muted-foreground"><Bell className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>No pending requests</p></div> : (
+            <div className="space-y-2">
+              {pendingRequests.map((r) => {
+                const isIncoming = r.receiver?.id === useAppStore.getState().user?.id;
+                const other = isIncoming ? r.sender : r.receiver;
+                return (
+                  <div key={r.id} className="flex items-center gap-3 p-3 rounded-xl border">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center text-white font-bold">{(other?.avatar || other?.name?.[0] || "?")}</div>
+                    <div className="flex-1 min-w-0"><p className="font-medium text-sm">{other?.name}</p><p className="text-[10px] text-muted-foreground">@{other?.username}</p></div>
+                    {isIncoming ? (
+                      <div className="flex gap-1.5">
+                        <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700" onClick={() => acceptFriendRequest(r.id)}><UserCheck className="w-3 h-3 mr-1" />Accept</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => rejectFriendRequest(r.id)}><UserX className="w-3 h-3 mr-1" />Decline</Button>
+                      </div>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px] border-0"><Clock className="w-3 h-3 mr-1" />Pending</Badge>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )
+        ) : (
+          filteredDiscover.length === 0 ? <div className="text-center py-12 text-muted-foreground"><UserPlus className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>No users found</p></div> : (
+            <div className="space-y-2">
+              {filteredDiscover.map((u) => (
+                <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl border hover:shadow-sm transition-all">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white font-bold">{(u.avatar || u.name[0])}</div>
+                  <div className="flex-1 min-w-0"><p className="font-medium text-sm">{u.name}</p><p className="text-[10px] text-muted-foreground">@{u.username}</p></div>
+                  <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700" onClick={() => sendFriendRequest(u.id)}><UserPlus className="w-3 h-3 mr-1" />Add</Button>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </ScrollArea>
+    </div>
+  );
+}
+
+/* ═══════════ PROJECTS VIEW ═══════════ */
+function ProjectsView() {
+  const { projects, projectsLoading, fetchProjects, createProject, deleteProject } = useSocialStore();
+  const { setCurrentView, setSelectedProjectId } = useAppStore();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [color, setColor] = useState("#10b981");
+
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  const colorOptions = ["#10b981", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6", "#ec4899", "#06b6d4", "#f97316"];
+
+  const handleCreate = async () => {
+    if (!name.trim()) return;
+    const p = await createProject({ name, description, color });
+    if (p) { toast.success("Project created!"); setDialogOpen(false); setName(""); setDescription(""); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div><h1 className="text-xl font-bold">Projects</h1><p className="text-sm text-muted-foreground">Collaborate with your team</p></div>
+        <Button onClick={() => setDialogOpen(true)} className="bg-gradient-to-r from-emerald-600 to-teal-600 gap-1.5"><Plus className="w-4 h-4" /> New Project</Button>
+      </div>
+
+      {projectsLoading ? (
+        <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
+      ) : projects.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground"><FolderKanban className="w-16 h-16 mx-auto mb-4 opacity-20" /><p className="text-lg font-medium">No projects yet</p><p className="text-sm mt-1">Create a project and invite friends to collaborate!</p></div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {projects.map((p) => {
+            const doneCount = p.tasks?.filter((t: any) => t.status === "done").length || 0;
+            const totalCount = p.tasks?.length || p._count?.tasks || 0;
+            const pct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+            return (
+              <Card key={p.id} className="border-0 shadow-sm hover:shadow-md transition-shadow cursor-pointer group" onClick={() => { setSelectedProjectId(p.id); setCurrentView("project-detail"); }}>
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: p.color }} />
+                      <h3 className="font-semibold text-sm">{p.name}</h3>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); toast.success("Project deleted"); }}><Trash2 className="w-3 h-3 text-red-500" /></Button>
+                  </div>
+                  {p.description && <p className="text-xs text-muted-foreground mb-2 line-clamp-1">{p.description}</p>}
+                  <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1"><Users className="w-3 h-3" />{p.members?.length || 0} members</span>
+                    <span className="flex items-center gap-1"><List className="w-3 h-3" />{totalCount} tasks</span>
+                  </div>
+                  {totalCount > 0 && (
+                    <div className="mt-2"><Progress value={pct} className="h-1" /><p className="text-[10px] text-muted-foreground mt-0.5">{pct}% complete</p></div>
+                  )}
+                  <div className="flex -space-x-2 mt-2">
+                    {p.members?.slice(0, 5).map((m) => (
+                      <div key={m.id} className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-[8px] font-bold border-2 border-background">{(m.user.avatar || m.user.name[0])}</div>
+                    ))}
+                    {(p.members?.length || 0) > 5 && <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[8px] border-2 border-background">+{p.members.length - 5}</div>}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Create Project</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" /></div>
+            <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What's this project about?" rows={2} /></div>
+            <div className="space-y-2"><Label>Color</Label><div className="flex gap-2">{colorOptions.map((c) => (<button key={c} onClick={() => setColor(c)} className={`w-8 h-8 rounded-full border-2 transition-all ${color === c ? "border-foreground scale-110" : "border-transparent"}`} style={{ backgroundColor: c }} />))}</div></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button><Button onClick={handleCreate} className="bg-gradient-to-r from-emerald-600 to-teal-600">Create</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/* ═══════════ PROJECT DETAIL VIEW ═══════════ */
+function ProjectDetailView() {
+  const { selectedProjectId, setCurrentView, categories } = useAppStore();
+  const { currentProject, fetchProjectDetail, addProjectTask, updateProjectTask, addProjectMember, removeProjectMember, taskComments, fetchComments, addComment } = useSocialStore();
+  const { friends } = useSocialStore();
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [memberDialogOpen, setMemberDialogOpen] = useState(false);
+  const [commentTaskId, setCommentTaskId] = useState<string | null>(null);
+  const [commentText, setCommentText] = useState("");
+
+  useEffect(() => {
+    if (selectedProjectId) fetchProjectDetail(selectedProjectId);
+  }, [selectedProjectId, fetchProjectDetail]);
+
+  useEffect(() => {
+    if (commentTaskId) fetchComments(commentTaskId);
+  }, [commentTaskId, fetchComments]);
+
+  if (!currentProject) return <div className="text-center py-12"><Loader2 className="w-6 h-6 animate-spin text-emerald-500 mx-auto" /></div>;
+
+  const isOwner = currentProject.ownerId === useAppStore.getState().user?.id;
+  const projectTasks = currentProject.tasks || [];
+  const doneTasks = projectTasks.filter((t: any) => t.status === "done").length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" onClick={() => setCurrentView("projects")}><ChevronLeft className="w-4 h-4" /></Button>
+        <div className="flex-1">
+          <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{ backgroundColor: currentProject.color }} /><h1 className="text-xl font-bold">{currentProject.name}</h1></div>
+          {currentProject.description && <p className="text-sm text-muted-foreground">{currentProject.description}</p>}
+        </div>
+        <Button onClick={() => setTaskDialogOpen(true)} className="bg-gradient-to-r from-emerald-600 to-teal-600 gap-1.5"><Plus className="w-4 h-4" /> Add Task</Button>
+        <Button variant="outline" onClick={() => setMemberDialogOpen(true)} className="gap-1.5"><UserPlus className="w-4 h-4" /> Members</Button>
+      </div>
+
+      {/* Members bar */}
+      <div className="flex items-center gap-2">
+        <div className="flex -space-x-2">
+          {currentProject.members?.map((m) => (
+            <div key={m.id} className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-[9px] font-bold border-2 border-background" title={`${m.user.name} (${m.role})`}>{(m.user.avatar || m.user.name[0])}</div>
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground">{currentProject.members?.length} members</span>
+        <Separator orientation="vertical" className="h-4" />
+        <span className="text-xs text-muted-foreground">{doneTasks}/{projectTasks.length} tasks done</span>
+      </div>
+
+      {/* Task list */}
+      <ScrollArea className="h-[calc(100vh-320px)]">
+        {projectTasks.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground"><List className="w-12 h-12 mx-auto mb-3 opacity-20" /><p>No tasks in this project yet</p></div>
+        ) : (
+          <div className="space-y-2">
+            {projectTasks.map((task: any) => {
+              const pCfg = priorityConfig[task.priority] || priorityConfig.medium;
+              const sCfg = statusConfig[task.status] || statusConfig.todo;
+              const taskCommentCount = task.comments?.length || 0;
+              return (
+                <div key={task.id} className="group flex gap-3 p-3 rounded-xl border hover:shadow-sm transition-all">
+                  <button onClick={() => updateProjectTask(task.id, { status: task.status === "done" ? "todo" : "done" })} className="mt-0.5 flex-shrink-0">
+                    {task.status === "done" ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Circle className="w-5 h-5 text-muted-foreground hover:text-emerald-500" />}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <h4 className={`text-sm font-medium ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}>{task.title}</h4>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100" onClick={() => { setCommentTaskId(commentTaskId === task.id ? null : task.id); setCommentText(""); }}><MessageSquare className="w-3 h-3" /></Button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 h-5 ${pCfg.bg} ${pCfg.color} border-0`}>{pCfg.label}</Badge>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 border-0"><div className={`w-1.5 h-1.5 rounded-full ${sCfg.color} mr-1`} />{sCfg.label}</Badge>
+                      {task.assignee && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">{task.assignee.name}</Badge>}
+                      {taskCommentCount > 0 && <span className="text-[10px] text-muted-foreground flex items-center gap-0.5"><MessageSquare className="w-2.5 h-2.5" />{taskCommentCount}</span>}
+                    </div>
+                    {/* Comments section */}
+                    {commentTaskId === task.id && (
+                      <div className="mt-2 pt-2 border-t space-y-2">
+                        {task.comments?.map((c: any) => (
+                          <div key={c.id} className="flex gap-2">
+                            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-slate-400 to-slate-500 flex items-center justify-center text-white text-[8px] font-bold flex-shrink-0">{(c.user.avatar || c.user.name[0])}</div>
+                            <div className="flex-1 min-w-0"><p className="text-[10px] font-medium">{c.user.name} <span className="font-normal text-muted-foreground">{format(new Date(c.createdAt), "MMM d, h:mm a")}</span></p><p className="text-xs">{c.content}</p></div>
+                          </div>
+                        ))}
+                        <div className="flex gap-2">
+                          <Input placeholder="Add a comment..." value={commentText} onChange={(e) => setCommentText(e.target.value)} className="h-7 text-xs" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) { addComment(task.id, commentText); setCommentText(""); } }} />
+                          <Button size="sm" className="h-7 text-xs bg-emerald-600" onClick={() => { if (commentText.trim()) { addComment(task.id, commentText); setCommentText(""); } }}><Send className="w-3 h-3" /></Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </ScrollArea>
+
+      {/* Add Task Dialog */}
+      <TaskFormDialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen} editTask={undefined} projectId={selectedProjectId!} members={currentProject.members || []} />
+
+      {/* Manage Members Dialog */}
+      <Dialog open={memberDialogOpen} onOpenChange={setMemberDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Manage Members</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase">Current Members</h4>
+            <div className="space-y-2">
+              {currentProject.members?.map((m) => (
+                <div key={m.id} className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-[9px] font-bold">{(m.user.avatar || m.user.name[0])}</div>
+                  <span className="text-sm flex-1">{m.user.name}</span>
+                  <Badge variant="secondary" className="text-[9px] border-0">{m.role}</Badge>
+                  {isOwner && m.role !== "owner" && <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { removeProjectMember(currentProject.id, m.userId); toast.success("Member removed"); }}><UserMinus className="w-3 h-3 text-red-500" /></Button>}
+                </div>
+              ))}
+            </div>
+            {friends.length > 0 && (<>
+              <Separator />
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase">Add from Friends</h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {friends.filter((f) => !currentProject.members?.some((m) => m.userId === f.id)).map((f) => (
+                  <div key={f.id} className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white text-[9px] font-bold">{(f.avatar || f.name[0])}</div>
+                    <span className="text-sm flex-1">{f.name}</span>
+                    <Button size="sm" className="h-6 text-xs bg-emerald-600" onClick={() => { addProjectMember(currentProject.id, f.id); toast.success("Member added!"); }}><UserPlus className="w-3 h-3 mr-1" />Add</Button>
+                  </div>
+                ))}
+              </div>
+            </>)}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/* ═══════════ NOTIFICATION BELL ═══════════ */
+function NotificationBell() {
+  const { notifications, unreadCount, fetchNotifications, markAllNotificationsRead } = useSocialStore();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="relative">
+          <Bell className="h-4 w-4" />
+          {unreadCount > 0 && <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 text-white text-[8px] rounded-full flex items-center justify-center font-bold">{unreadCount > 9 ? "9+" : unreadCount}</span>}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <div className="flex items-center justify-between p-2">
+          <span className="text-sm font-semibold">Notifications</span>
+          {unreadCount > 0 && <Button variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => markAllNotificationsRead()}>Mark all read</Button>}
+        </div>
+        <Separator />
+        <div className="max-h-64 overflow-y-auto">
+          {notifications.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-4">No notifications</p>
+          ) : (
+            notifications.slice(0, 10).map((n) => (
+              <div key={n.id} className={`px-3 py-2 text-xs hover:bg-accent/50 cursor-pointer ${!n.read ? "bg-emerald-50 dark:bg-emerald-950/30" : ""}`}>
+                <p className="font-medium">{n.title}</p>
+                {n.body && <p className="text-muted-foreground mt-0.5">{n.body}</p>}
+                <p className="text-[10px] text-muted-foreground mt-0.5">{format(new Date(n.createdAt), "MMM d, h:mm a")}</p>
+              </div>
+            ))
+          )}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /* ═══════════ THEME TOGGLE ═══════════ */
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -930,7 +1233,8 @@ function AppContent() {
   if (!isAuthenticated) return <LoginPage />;
 
   const views: Record<ViewMode, React.ReactNode> = {
-    dashboard: <DashboardView />, tasks: <TaskListView />, monthly: <MonthlyView />, calendar: <CalendarView />, categories: <CategoriesView />,
+    dashboard: <DashboardView />, tasks: <TaskListView />, monthly: <MonthlyView />, calendar: <CalendarView />,
+    projects: <ProjectsView />, friends: <FriendsView />, "project-detail": <ProjectDetailView />, categories: <CategoriesView />,
   };
 
   return (
@@ -940,10 +1244,12 @@ function AppContent() {
       <main className="flex-1 min-w-0">
         <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b px-4 py-3 flex md:hidden items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(true)}><Menu className="w-5 h-5" /></Button>
-          <h1 className="font-semibold text-sm">TaskFlow Pro</h1>
+          <h1 className="font-semibold text-sm flex-1">TaskFlow Pro</h1>
+          <NotificationBell />
         </header>
         <header className="hidden md:flex sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b px-6 py-3 items-center justify-between">
-          <div /><ThemeToggle />
+          <div />
+          <div className="flex items-center gap-1"><NotificationBell /><ThemeToggle /></div>
         </header>
         <div className="p-4 md:p-6 max-w-5xl mx-auto">
           <AnimatePresence mode="wait">

@@ -3,28 +3,35 @@ generator client {
 }
 
 datasource db {
-  provider = "mongodb"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
 model User {
-  id         String     @id @default(auto()) @map("_id") @db.ObjectId
-  username   String     @unique
-  password   String
-  name       String
-  avatar     String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  tasks      Task[]
-  categories Category[]
+  id              String           @id @default(cuid())
+  username        String           @unique
+  password        String
+  name            String
+  avatar          String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  tasks           Task[]
+  categories      Category[]
+  sentRequests     FriendRequest[]  @relation("SentRequests")
+  receivedRequests FriendRequest[]  @relation("ReceivedRequests")
+  ownedProjects   Project[]        @relation("ProjectOwner")
+  projectMembers  ProjectMember[]
+  comments        Comment[]
+  notifications   Notification[]
+  assignedTasks   Task[]           @relation("TaskAssignee")
 }
 
 model Category {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  id        String   @id @default(cuid())
   name      String
   icon      String   @default("tag")
   color     String   @default("#6366f1")
-  userId    String   @db.ObjectId
+  userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tasks     Task[]
   createdAt DateTime @default(now())
@@ -34,21 +41,87 @@ model Category {
 }
 
 model Task {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  title       String
+  id           String        @id @default(cuid())
+  title        String
+  description  String?
+  status       String        @default("todo")
+  priority     String        @default("medium")
+  dueDate      String?
+  dueTime      String?
+  categoryId   String?
+  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tags         String        @default("")
+  isRecurring  Boolean       @default(false)
+  recurRule    String?
+  completedAt  String?
+  projectId    String?
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  assigneeId   String?
+  assignee     User?         @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  comments     Comment[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model FriendRequest {
+  id         String   @id @default(cuid())
+  senderId   String
+  sender     User     @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  receiver   User     @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+  status     String   @default("pending") // pending, accepted, rejected
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([senderId, receiverId])
+}
+
+model Project {
+  id          String           @id @default(cuid())
+  name        String
   description String?
-  status      String    @default("todo")   // todo | in-progress | done
-  priority    String    @default("medium") // low | medium | high | urgent
-  dueDate     String?
-  dueTime     String?
-  categoryId  String?   @db.ObjectId
-  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  userId      String    @db.ObjectId
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tags        String    @default("")
-  isRecurring Boolean   @default(false)
-  recurRule   String?
-  completedAt String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  color       String           @default("#10b981")
+  ownerId     String
+  owner       User             @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     ProjectMember[]
+  tasks       Task[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   @default("member") // owner, admin, member
+  joinedAt  DateTime @default(now())
+
+  @@unique([projectId, userId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // friend_request, task_assigned, task_completed, comment_added, project_invite
+  title     String
+  body      String   @default("")
+  read      Boolean  @default(false)
+  linkId    String?  // id of related entity
+  createdAt DateTime @default(now())
 }

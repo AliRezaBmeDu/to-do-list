@@ -15,10 +15,9 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "TaskFlow Pro - Smart Todo App",
-  description:
-    "Smart Todo application for software engineers, businessmen, and social life organizers. Manage tasks with date-wise sorting, calendar view, categories, and more.",
+  description: "Smart Todo application for software engineers, businessmen, and social life organizers. Manage tasks with date-wise sorting, calendar view, categories, and more.",
   icons: {
-    icon: "/logo.svg",
+    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
 };
 
