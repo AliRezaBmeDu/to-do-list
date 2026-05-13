@@ -1,3 +1,6 @@
+// @ts-nocheck — This is a standalone microservice, not part of the Next.js app.
+// It has its own dependencies (socket.io) and runs separately.
+// tsconfig.json excludes "mini-services" from the Next.js build.
 import { Server } from "socket.io";
 
 const PORT = 3003;

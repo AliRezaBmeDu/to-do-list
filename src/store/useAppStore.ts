@@ -34,6 +34,11 @@ interface Task {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  // Unified task list: distinguish personal vs project tasks
+  source?: "personal" | "project";
+  projectId?: string | null;
+  projectName?: string | null;
+  projectColor?: string | null;
 }
 
 interface Category {
@@ -404,16 +409,28 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   updateTask: async (id, updates) => {
     try {
-      const res = await fetch(`/api/tasks/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
+      // Find the task to determine if it's a project task
+      const task = get().tasks.find((t) => t.id === id);
+      let res: Response;
+      if (task?.source === "project" && task?.projectId) {
+        // Route to project task API
+        res = await fetch(`/api/projects/${task.projectId}/tasks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+      } else {
+        // Route to personal task API
+        res = await fetch(`/api/tasks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+      }
       if (!res.ok) return null;
       const updated = await res.json();
-      set((s) => ({
-        tasks: s.tasks.map((t) => (t.id === id ? updated : t)),
-      }));
+      // Re-fetch tasks to keep unified list in sync
+      get().fetchTasks();
       return updated;
     } catch {
       return null;
@@ -422,9 +439,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   deleteTask: async (id) => {
     try {
-      const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+      // Find the task to determine if it's a project task
+      const task = get().tasks.find((t) => t.id === id);
+      let res: Response;
+      if (task?.source === "project" && task?.projectId) {
+        // Route to project task API
+        res = await fetch(`/api/projects/${task.projectId}/tasks/${id}`, { method: "DELETE" });
+      } else {
+        // Route to personal task API
+        res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+      }
       if (!res.ok) return false;
-      set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }));
+      // Re-fetch tasks to keep unified list in sync
+      get().fetchTasks();
       return true;
     } catch {
       return false;

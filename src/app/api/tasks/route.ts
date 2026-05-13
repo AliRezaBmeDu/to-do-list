@@ -9,13 +9,71 @@ export async function GET() {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const tasks = await db.task.findMany({
+    // Fetch personal tasks
+    const personalTasks = await db.task.findMany({
       where: { userId },
       include: { category: true },
       orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
     });
 
-    return NextResponse.json(tasks);
+    // Fetch project tasks assigned to this user
+    const projectTasks = await db.projectTask.findMany({
+      where: {
+        OR: [
+          { assigneeId: userId },
+          { createdById: userId },
+        ],
+      },
+      include: {
+        assignee: { select: { id: true, username: true, name: true, avatar: true } },
+        project: { select: { id: true, name: true, color: true, icon: true } },
+      },
+      orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+    });
+
+    // Normalize personal tasks with source tag
+    const normalizedPersonal = personalTasks.map((t) => ({
+      ...t,
+      source: "personal" as const,
+      projectId: null,
+      projectName: null,
+      projectColor: null,
+    }));
+
+    // Normalize project tasks to match task list shape
+    const normalizedProject = projectTasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      priority: t.priority,
+      dueDate: t.dueDate,
+      dueTime: t.dueTime,
+      categoryId: null,
+      category: null,
+      tags: t.tags,
+      isRecurring: t.isRecurring,
+      recurRule: t.recurRule,
+      completedAt: t.completedAt,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      source: "project" as const,
+      projectId: t.projectId,
+      projectName: t.project.name,
+      projectColor: t.project.color,
+    }));
+
+    // Merge and sort by due date, then created date
+    const allTasks = [...normalizedPersonal, ...normalizedProject].sort((a, b) => {
+      // Tasks with due dates come first
+      if (a.dueDate && !b.dueDate) return -1;
+      if (!a.dueDate && b.dueDate) return 1;
+      if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      // Then by creation date (newest first)
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return NextResponse.json(allTasks);
   } catch (error) {
     console.error("Get tasks error:", error);
     return NextResponse.json(
