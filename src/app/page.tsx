@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useAppStore, ViewMode } from "@/store/useAppStore";
 import { format, isToday, isTomorrow, isYesterday, isSameMonth, parseISO, isValid, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths, formatDistanceToNow } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
@@ -13,8 +13,11 @@ import {
   Timer, ArrowUpRight, ArrowDownRight, Sparkles, UserPlus,
   FolderKanban, ArrowLeft, Send, ThumbsUp, MessageSquare,
   Video, Phone, PhoneCall, CalendarPlus, X, Shield, Crown,
-  Eye, Settings2, UserMinus, UserCheck, Rss
+  Eye, Settings2, UserMinus, UserCheck, Rss,
+  Folder, FolderOpen, FileText, File, Image as ImageIcon,
+  ChevronDown, FolderPlus
 } from "lucide-react";
+import { marked } from "marked";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -225,20 +228,28 @@ function SidebarNav({ onNavClose }: { onNavClose?: () => void }) {
 
 /* ═══════════ TASK CARD ═══════════ */
 function TaskCard({ task, onEdit, onToggleDone, onDelete }: { task: any; onEdit: () => void; onToggleDone: () => void; onDelete: () => void }) {
+  const { setSelectedTask, setCurrentView } = useAppStore();
   const pCfg = priorityConfig[task.priority] || priorityConfig.medium;
   const sCfg = statusConfig[task.status] || statusConfig.todo;
   const PriorityIcon = pCfg.icon;
   const dueDateLabel = (() => { if (!task.dueDate) return null; const d = parseISO(task.dueDate); if (!isValid(d)) return task.dueDate; if (isToday(d)) return "Today"; if (isTomorrow(d)) return "Tomorrow"; if (isYesterday(d)) return "Yesterday"; return format(d, "MMM d, yyyy"); })();
   const isOverdue = task.dueDate && task.status !== "done" && parseISO(task.dueDate) < new Date(new Date().toDateString());
+
+  const handleClick = () => {
+    setSelectedTask(task);
+    setCurrentView("task-detail");
+  };
+
   return (
     <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
-      className={`group relative flex gap-3 p-3 rounded-xl border transition-all hover:shadow-md ${task.status === "done" ? "opacity-60" : ""} ${isOverdue ? "border-red-200 dark:border-red-900" : "border-border"}`}>
-      <button onClick={onToggleDone} className="mt-0.5 flex-shrink-0">{task.status === "done" ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Circle className="w-5 h-5 text-muted-foreground hover:text-emerald-500 transition-colors" />}</button>
+      onClick={handleClick}
+      className={`group relative flex gap-3 p-3 rounded-xl border transition-all hover:shadow-md cursor-pointer ${task.status === "done" ? "opacity-60" : ""} ${isOverdue ? "border-red-200 dark:border-red-900" : "border-border"}`}>
+      <button onClick={(e) => { e.stopPropagation(); onToggleDone(); }} className="mt-0.5 flex-shrink-0">{task.status === "done" ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Circle className="w-5 h-5 text-muted-foreground hover:text-emerald-500 transition-colors" />}</button>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
           <h4 className={`text-sm font-medium leading-snug ${task.status === "done" ? "line-through text-muted-foreground" : ""}`}>{task.title}</h4>
-          <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"><MoreHorizontal className="w-3.5 h-3.5" /></Button></DropdownMenuTrigger>
-            <DropdownMenuContent align="end"><DropdownMenuItem onClick={onEdit}><Edit3 className="w-3.5 h-3.5 mr-2" /> Edit</DropdownMenuItem><DropdownMenuItem onClick={onDelete} className="text-red-500"><Trash2 className="w-3.5 h-3.5 mr-2" /> Delete</DropdownMenuItem></DropdownMenuContent>
+          <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" onClick={(e) => e.stopPropagation()}><MoreHorizontal className="w-3.5 h-3.5" /></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end"><DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(); }}><Edit3 className="w-3.5 h-3.5 mr-2" /> Edit</DropdownMenuItem><DropdownMenuItem onClick={(e) => { e.stopPropagation(); onDelete(); }} className="text-red-500"><Trash2 className="w-3.5 h-3.5 mr-2" /> Delete</DropdownMenuItem></DropdownMenuContent>
           </DropdownMenu>
         </div>
         {task.description && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{task.description}</p>}
@@ -247,6 +258,7 @@ function TaskCard({ task, onEdit, onToggleDone, onDelete }: { task: any; onEdit:
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 border-0"><div className={`w-1.5 h-1.5 rounded-full ${sCfg.color} mr-1`} />{sCfg.label}</Badge>
           {task.category && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5" style={{ borderColor: task.category.color, color: task.category.color }}>{task.category.name}</Badge>}
           {task.source === "project" && task.projectName && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 border-0 bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300"><FolderKanban className="w-2.5 h-2.5 mr-0.5" />{task.projectName}</Badge>}
+          {task.folderName && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-5 border-0 bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-300"><Folder className="w-2.5 h-2.5 mr-0.5" />{task.folderName}</Badge>}
           {dueDateLabel && (<span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? "text-red-500 font-medium" : "text-muted-foreground"}`}><Clock className="w-2.5 h-2.5" />{dueDateLabel}{task.dueTime && ` ${task.dueTime}`}</span>)}
           {task.tags && task.tags.split(",").filter(Boolean).map((tag: string) => (<span key={tag} className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0 rounded">#{tag.trim()}</span>))}
         </div>
@@ -267,8 +279,9 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: { editTask?: 
   const [tags, setTags] = useState(editTask?.tags || "");
   const [isRecurring, setIsRecurring] = useState(editTask?.isRecurring || false);
   const [recurRule, setRecurRule] = useState(editTask?.recurRule || "");
+  const [folderName, setFolderName] = useState(editTask?.folderName || "");
   const [saving, setSaving] = useState(false);
-  const handleSave = async () => { if (!title.trim()) return; setSaving(true); await onSave({ title, description, status, priority, dueDate: dueDate || null, dueTime: dueTime || null, categoryId: categoryId === "none" ? null : categoryId || null, tags, isRecurring, recurRule: recurRule || null }); setSaving(false); };
+  const handleSave = async () => { if (!title.trim()) return; setSaving(true); await onSave({ title, description, status, priority, dueDate: dueDate || null, dueTime: dueTime || null, categoryId: categoryId === "none" ? null : categoryId || null, tags, isRecurring, recurRule: recurRule || null, folderName: folderName.trim() || null }); setSaving(false); };
   return (
     <div className="space-y-4 py-2">
       <div className="space-y-2"><Label>Title *</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs to be done?" className="h-10" /></div>
@@ -277,6 +290,7 @@ function TaskFormInner({ editTask, categories, onSave, onCancel }: { editTask?: 
       <div className="grid grid-cols-2 gap-3"><div className="space-y-2"><Label>Due Date</Label><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="h-10" /></div><div className="space-y-2"><Label>Time</Label><Input type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} className="h-10" /></div></div>
       <div className="space-y-2"><Label>Category</Label><Select value={categoryId} onValueChange={setCategoryId}><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger><SelectContent><SelectItem value="none">No Category</SelectItem>{categories.map((c) => (<SelectItem key={c.id} value={c.id}><div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color }} />{c.name}</div></SelectItem>))}</SelectContent></Select></div>
       <div className="space-y-2"><Label>Tags (comma-separated)</Label><Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="e.g. backend, urgent, meeting" className="h-10" /></div>
+      <div className="space-y-2"><Label>Local Folder Name</Label><Input value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="e.g. my-project-src (for reference only)" className="h-10" /></div>
       <div className="flex items-center gap-3"><Switch checked={isRecurring} onCheckedChange={setIsRecurring} /><Label>Recurring Task</Label></div>
       {isRecurring && (<div className="space-y-2"><Label>Repeat</Label><Select value={recurRule} onValueChange={setRecurRule}><SelectTrigger><SelectValue placeholder="Select frequency" /></SelectTrigger><SelectContent><SelectItem value="daily">Daily</SelectItem><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div>)}
       <DialogFooter><Button variant="outline" onClick={onCancel}>Cancel</Button><Button onClick={handleSave} disabled={saving || !title.trim()} className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700">{saving ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null} {editTask ? "Update" : "Create"}</Button></DialogFooter>
@@ -895,6 +909,327 @@ function VideoCallRoomView() {
   );
 }
 
+/* ═══════════ TASK DETAIL VIEW ═══════════ */
+// File icon helper based on extension
+function getFileIcon(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["md", "markdown"].includes(ext)) return <FileText className="w-4 h-4 text-blue-500" />;
+  if (["txt", "log", "csv"].includes(ext)) return <FileText className="w-4 h-4 text-gray-500" />;
+  if (["json", "js", "ts", "tsx", "jsx", "py", "rb", "go", "rs", "java", "c", "cpp", "h"].includes(ext)) return <Code className="w-4 h-4 text-emerald-500" />;
+  if (["html", "css", "scss", "xml", "yaml", "yml", "toml"].includes(ext)) return <Code className="w-4 h-4 text-orange-500" />;
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"].includes(ext)) return <ImageIcon className="w-4 h-4 text-purple-500" />;
+  if (["pdf"].includes(ext)) return <FileText className="w-4 h-4 text-red-500" />;
+  return <File className="w-4 h-4 text-muted-foreground" />;
+}
+
+function isTextFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return [
+    "txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "py", "rb",
+    "go", "rs", "java", "c", "cpp", "h", "html", "css", "scss", "xml",
+    "yaml", "yml", "toml", "csv", "log", "sh", "bash", "zsh", "env",
+    "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc",
+    "ini", "cfg", "conf", "properties", "sql", "graphql", "vue", "svelte",
+  ].includes(ext);
+}
+
+function isMarkdownFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ["md", "markdown"].includes(ext);
+}
+
+function isImageFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"].includes(ext);
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+interface LocalFile {
+  name: string;
+  kind: "file" | "directory";
+  size?: number;
+  lastModified?: number;
+  handle?: FileSystemFileHandle;
+  children?: LocalFile[];
+  content?: string;
+}
+
+function TaskDetailView() {
+  const { selectedTask, setSelectedTask, setCurrentView, updateTask, categories } = useAppStore();
+  const [dirHandle, setDirHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [files, setFiles] = useState<LocalFile[]>([]);
+  const [selectedFile, setSelectedFile] = useState<LocalFile | null>(null);
+  const [fileContent, setFileContent] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [renderedMarkdown, setRenderedMarkdown] = useState<string>("");
+  const [imageDataUrl, setImageDataUrl] = useState<string>("");
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [folderSaving, setFolderSaving] = useState(false);
+
+  if (!selectedTask) return <p className="text-center py-8 text-muted-foreground">No task selected</p>;
+
+  const pCfg = priorityConfig[selectedTask.priority] || priorityConfig.medium;
+  const sCfg = statusConfig[selectedTask.status] || statusConfig.todo;
+  const isOverdue = selectedTask.dueDate && selectedTask.status !== "done" && parseISO(selectedTask.dueDate) < new Date(new Date().toDateString());
+  const dueDateLabel = (() => {
+    if (!selectedTask.dueDate) return null;
+    const d = parseISO(selectedTask.dueDate);
+    if (!isValid(d)) return selectedTask.dueDate;
+    if (isToday(d)) return "Today";
+    if (isTomorrow(d)) return "Tomorrow";
+    if (isYesterday(d)) return "Yesterday";
+    return format(d, "EEEE, MMM d, yyyy");
+  })();
+
+  // Open folder picker using File System Access API
+  const openFolderPicker = async () => {
+    try {
+      if (!("showDirectoryPicker" in window)) {
+        toast.error("Your browser doesn't support local folder access. Please use Chrome or Edge.");
+        return;
+      }
+      const handle = await (window as any).showDirectoryPicker({ mode: "read" });
+      setDirHandle(handle);
+      const entries = await readDirectory(handle);
+      setFiles(entries);
+      // Save folder name to task
+      const folderName = handle.name;
+      if (folderName !== selectedTask.folderName) {
+        setFolderSaving(true);
+        await updateTask(selectedTask.id, { folderName });
+        setFolderSaving(false);
+        toast.success(`Folder "${folderName}" linked to task`);
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        toast.error("Failed to open folder: " + err.message);
+      }
+    }
+  };
+
+  // Read directory contents recursively (1 level deep for subdirs)
+  const readDirectory = async (dirHandle: FileSystemDirectoryHandle, path: string = ""): Promise<LocalFile[]> => {
+    const entries: LocalFile[] = [];
+    for await (const [name, handle] of (dirHandle as any).entries()) {
+      if (name.startsWith(".")) continue; // Skip hidden files
+      if (handle.kind === "file") {
+        const file = await handle.getFile();
+        entries.push({
+          name,
+          kind: "file",
+          size: file.size,
+          lastModified: file.lastModified,
+          handle,
+        });
+      } else if (handle.kind === "directory") {
+        const children = await readDirectory(handle, `${path}${name}/`);
+        entries.push({
+          name,
+          kind: "directory",
+          children,
+        });
+      }
+    }
+    // Sort: directories first, then files, alphabetically
+    return entries.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  };
+
+  // Read file content
+  const openFile = async (file: LocalFile) => {
+    if (file.kind === "directory") {
+      toggleDir(file.name);
+      return;
+    }
+    if (!file.handle) return;
+    setLoading(true);
+    setSelectedFile(file);
+    setFileContent("");
+    setRenderedMarkdown("");
+    setImageDataUrl("");
+
+    try {
+      const f = await file.handle.getFile();
+
+      if (isImageFile(file.name)) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          setImageDataUrl(reader.result as string);
+          setLoading(false);
+        };
+        reader.readAsDataURL(f);
+      } else if (isTextFile(file.name)) {
+        const text = await f.text();
+        setFileContent(text);
+        if (isMarkdownFile(file.name)) {
+          const html = await marked(text);
+          setRenderedMarkdown(html);
+        }
+        setLoading(false);
+      } else {
+        setFileContent(`[Binary file: ${file.name}]\nSize: ${formatFileSize(f.size)}\n\nThis file type cannot be displayed as text.`);
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setFileContent(`Error reading file: ${err.message}`);
+      setLoading(false);
+    }
+  };
+
+  const toggleDir = (name: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  // Render file tree
+  const renderFileTree = (items: LocalFile[], depth: number = 0): React.ReactNode => {
+    return items.map((item) => {
+      const isSelected = selectedFile?.name === item.name;
+      if (item.kind === "directory") {
+        const isExpanded = expandedDirs.has(item.name);
+        return (
+          <div key={item.name}>
+            <button
+              onClick={() => toggleDir(item.name)}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-accent transition-colors ${depth > 0 ? "ml-" + (depth * 3) : ""}`}
+              style={{ paddingLeft: `${depth * 16 + 8}px` }}
+            >
+              {isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+              {isExpanded ? <FolderOpen className="w-4 h-4 text-amber-500" /> : <Folder className="w-4 h-4 text-amber-500" />}
+              <span className="flex-1 text-left truncate font-medium">{item.name}</span>
+              {item.children && <span className="text-[9px] text-muted-foreground">{item.children.length}</span>}
+            </button>
+            {isExpanded && item.children && renderFileTree(item.children, depth + 1)}
+          </div>
+        );
+      }
+      return (
+        <button
+          key={item.name}
+          onClick={() => openFile(item)}
+          className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${isSelected ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300" : "hover:bg-accent"}`}
+          style={{ paddingLeft: `${depth * 16 + 20}px` }}
+        >
+          {getFileIcon(item.name)}
+          <span className="flex-1 text-left truncate">{item.name}</span>
+          {item.size !== undefined && <span className="text-[9px] text-muted-foreground flex-shrink-0">{formatFileSize(item.size)}</span>}
+        </button>
+      );
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="icon" onClick={() => setCurrentView("tasks")}><ArrowLeft className="w-4 h-4" /></Button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <button onClick={() => updateTask(selectedTask.id, { status: selectedTask.status === "done" ? "todo" : "done" })}>
+              {selectedTask.status === "done" ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <Circle className="w-5 h-5 text-muted-foreground hover:text-emerald-500 transition-colors" />}
+            </button>
+            <h1 className={`text-xl font-bold ${selectedTask.status === "done" ? "line-through text-muted-foreground" : ""}`}>{selectedTask.title}</h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <Badge variant="secondary" className={`text-[10px] px-2 py-0.5 h-5 ${pCfg.bg} ${pCfg.color} border-0`}>{pCfg.label} Priority</Badge>
+            <Badge variant="secondary" className="text-[10px] px-2 py-0.5 h-5 border-0"><div className={`w-1.5 h-1.5 rounded-full ${sCfg.color} mr-1`} />{sCfg.label}</Badge>
+            {selectedTask.category && <Badge variant="outline" className="text-[10px] px-2 py-0.5 h-5" style={{ borderColor: selectedTask.category.color, color: selectedTask.category.color }}>{selectedTask.category.name}</Badge>}
+            {selectedTask.source === "project" && selectedTask.projectName && <Badge variant="secondary" className="text-[10px] px-2 py-0.5 h-5 border-0 bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300"><FolderKanban className="w-2.5 h-2.5 mr-0.5" />{selectedTask.projectName}</Badge>}
+            {dueDateLabel && <span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? "text-red-500 font-medium" : "text-muted-foreground"}`}><Clock className="w-3 h-3" />{dueDateLabel}{selectedTask.dueTime && ` ${selectedTask.dueTime}`}</span>}
+          </div>
+          {selectedTask.description && <p className="text-sm text-muted-foreground mt-2">{selectedTask.description}</p>}
+        </div>
+      </div>
+
+      {/* Local Folder Section */}
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2"><Folder className="w-4 h-4 text-amber-500" /> Local Folder</CardTitle>
+            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 h-7 text-xs gap-1" onClick={openFolderPicker} disabled={folderSaving}>
+              <FolderPlus className="w-3.5 h-3.5" /> {dirHandle ? "Change Folder" : "Attach Folder"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {dirHandle ? (
+            <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+              <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+              <span className="font-medium text-foreground">{dirHandle.name}</span>
+              <span>— {files.length} items</span>
+              {folderSaving && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
+            </div>
+          ) : (
+            <div className="text-center py-6 border-2 border-dashed rounded-xl">
+              <Folder className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
+              <p className="text-xs text-muted-foreground">No folder attached</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Click "Attach Folder" to link a local directory</p>
+              <p className="text-[10px] text-muted-foreground/60 mt-0.5">Files stay local — nothing is uploaded to the internet</p>
+            </div>
+          )}
+
+          {dirHandle && files.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-2">
+              {/* File tree */}
+              <div className="lg:col-span-1 border rounded-xl p-2 max-h-[calc(100vh-420px)] overflow-y-auto">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-2">Files</p>
+                {renderFileTree(files)}
+              </div>
+
+              {/* File viewer */}
+              <div className="lg:col-span-2 border rounded-xl overflow-hidden">
+                {loading ? (
+                  <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
+                ) : selectedFile ? (
+                  <div className="h-[calc(100vh-420px)] overflow-auto">
+                    {/* File header */}
+                    <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-3 py-2 flex items-center gap-2">
+                      {getFileIcon(selectedFile.name)}
+                      <span className="text-xs font-medium truncate flex-1">{selectedFile.name}</span>
+                      {selectedFile.size !== undefined && <span className="text-[9px] text-muted-foreground">{formatFileSize(selectedFile.size)}</span>}
+                    </div>
+
+                    {/* File content */}
+                    {imageDataUrl ? (
+                      <div className="p-4 flex items-center justify-center min-h-48">
+                        <img src={imageDataUrl} alt={selectedFile.name} className="max-w-full max-h-[calc(100vh-500px)] object-contain rounded-lg" />
+                      </div>
+                    ) : renderedMarkdown ? (
+                      <div className="p-4 prose prose-sm dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: renderedMarkdown }} />
+                    ) : (
+                      <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-words text-foreground/90 bg-muted/30 min-h-48">
+                        {fileContent}
+                      </pre>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-muted-foreground">
+                    <div className="text-center">
+                      <FileText className="w-8 h-8 mx-auto text-muted-foreground/30 mb-2" />
+                      <p className="text-xs">Select a file to preview</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 /* ═══════════ THEME TOGGLE ═══════════ */
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -927,6 +1262,7 @@ function AppContent() {
     friends: <FriendsView />, feed: <FeedView />, messages: <MessagesView />, chat: <ChatView />,
     projects: <ProjectsView />, "project-detail": <ProjectDetailView />,
     videocalls: <VideoCallsView />, "video-call-room": <VideoCallRoomView />,
+    "task-detail": <TaskDetailView />,
   };
 
   return (

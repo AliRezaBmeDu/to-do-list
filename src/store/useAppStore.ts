@@ -13,7 +13,8 @@ export type ViewMode =
   | "messages"
   | "chat"
   | "videocalls"
-  | "video-call-room";
+  | "video-call-room"
+  | "task-detail";
 
 // ──────────────────────────────────────────────
 // Shared types
@@ -39,6 +40,7 @@ interface Task {
   projectId?: string | null;
   projectName?: string | null;
   projectColor?: string | null;
+  folderName?: string | null;
 }
 
 interface Category {
@@ -237,6 +239,10 @@ interface AppStore {
   // Selected date for calendar
   selectedDate: string | null;
   setSelectedDate: (d: string | null) => void;
+
+  // Selected task for detail view
+  selectedTask: Task | null;
+  setSelectedTask: (task: Task | null) => void;
 
   // ─── Friends ────────────────────────────────
   friends: Friend[];
@@ -535,6 +541,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   selectedDate: null,
   setSelectedDate: (d) => set({ selectedDate: d }),
 
+  selectedTask: null,
+  setSelectedTask: (task) => set({ selectedTask: task }),
+
   // ═══════════ FRIENDS ═══════════
   friends: [],
   pendingRequests: [],
@@ -806,6 +815,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       if (!res.ok) return null;
       const newTask = await res.json();
       set((s) => ({ projectTasks: [newTask, ...s.projectTasks] }));
+      // Also refresh the unified task list so the new project task appears in the main list
+      get().fetchTasks();
       return newTask;
     } catch {
       return null;
@@ -824,6 +835,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set((s) => ({
         projectTasks: s.projectTasks.map((t) => (t.id === taskId ? updated : t)),
       }));
+      // Also refresh the unified task list so changes reflect in the main list
+      get().fetchTasks();
       return updated;
     } catch {
       return null;
@@ -837,6 +850,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
       });
       if (!res.ok) return false;
       set((s) => ({ projectTasks: s.projectTasks.filter((t) => t.id !== taskId) }));
+      // Also refresh the unified task list so deletion reflects in the main list
+      get().fetchTasks();
       return true;
     } catch {
       return false;

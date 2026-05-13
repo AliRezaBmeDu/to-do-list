@@ -9,29 +9,84 @@ export async function GET() {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    // Fetch personal tasks
-    const personalTasks = await db.task.findMany({
-      where: { userId },
-      include: { category: true },
-      orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-    });
+    // ─── Fetch personal tasks ───
+    let personalTasks: any[] = [];
+    try {
+      personalTasks = await db.task.findMany({
+        where: { userId },
+        include: { category: true },
+        orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+      });
+    } catch (err) {
+      console.error("Fetch personal tasks error:", err);
+    }
 
-    // Fetch project tasks assigned to this user
-    const projectTasks = await db.projectTask.findMany({
-      where: {
-        OR: [
-          { assigneeId: userId },
-          { createdById: userId },
-        ],
-      },
-      include: {
-        assignee: { select: { id: true, username: true, name: true, avatar: true } },
-        project: { select: { id: true, name: true, color: true, icon: true } },
-      },
-      orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-    });
+    // ─── Fetch project tasks assigned to or created by this user ───
+    let projectTasks: any[] = [];
+    try {
+      projectTasks = await db.projectTask.findMany({
+        where: {
+          OR: [
+            { assigneeId: userId },
+            { createdById: userId },
+          ],
+        },
+        include: {
+          assignee: { select: { id: true, username: true, name: true, avatar: true } },
+          project: { select: { id: true, name: true, color: true, icon: true } },
+        },
+        orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+      });
+    } catch (err) {
+      // If the OR query fails (e.g. createdById not synced to DB yet),
+      // try fetching only by assigneeId as a fallback
+      console.error("Fetch project tasks (OR) error, trying fallback:", err);
+      try {
+        projectTasks = await db.projectTask.findMany({
+          where: { assigneeId: userId },
+          include: {
+            assignee: { select: { id: true, username: true, name: true, avatar: true } },
+            project: { select: { id: true, name: true, color: true, icon: true } },
+          },
+          orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+        });
+      } catch (err2) {
+        console.error("Fetch project tasks (fallback) error:", err2);
+      }
+    }
 
-    // Normalize personal tasks with source tag
+    // Also fetch project tasks where user is a project member
+    // (covers tasks with no assignee in projects the user belongs to)
+    let memberProjectTasks: any[] = [];
+    try {
+      const memberships = await db.projectMember.findMany({
+        where: { userId },
+        select: { projectId: true },
+      });
+      const projectIds = memberships.map((m) => m.projectId);
+
+      if (projectIds.length > 0) {
+        // Get all tasks from user's projects that aren't already fetched
+        const alreadyFetchedIds = new Set(projectTasks.map((t) => t.id));
+        const allProjectTasks = await db.projectTask.findMany({
+          where: { projectId: { in: projectIds } },
+          include: {
+            assignee: { select: { id: true, username: true, name: true, avatar: true } },
+            project: { select: { id: true, name: true, color: true, icon: true } },
+          },
+          orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+        });
+        // Only add tasks not already in the list
+        memberProjectTasks = allProjectTasks.filter((t) => !alreadyFetchedIds.has(t.id));
+      }
+    } catch (err) {
+      console.error("Fetch member project tasks error:", err);
+    }
+
+    // Combine all project tasks (deduplicated)
+    const allProjectTasks = [...projectTasks, ...memberProjectTasks];
+
+    // ─── Normalize personal tasks with source tag ───
     const normalizedPersonal = personalTasks.map((t) => ({
       ...t,
       source: "personal" as const,
@@ -40,8 +95,8 @@ export async function GET() {
       projectColor: null,
     }));
 
-    // Normalize project tasks to match task list shape
-    const normalizedProject = projectTasks.map((t) => ({
+    // ─── Normalize project tasks to match task list shape ───
+    const normalizedProject = allProjectTasks.map((t) => ({
       id: t.id,
       title: t.title,
       description: t.description,
@@ -59,17 +114,15 @@ export async function GET() {
       updatedAt: t.updatedAt,
       source: "project" as const,
       projectId: t.projectId,
-      projectName: t.project.name,
-      projectColor: t.project.color,
+      projectName: t.project?.name ?? "Unknown Project",
+      projectColor: t.project?.color ?? "#6366f1",
     }));
 
-    // Merge and sort by due date, then created date
+    // ─── Merge and sort by due date, then created date ───
     const allTasks = [...normalizedPersonal, ...normalizedProject].sort((a, b) => {
-      // Tasks with due dates come first
       if (a.dueDate && !b.dueDate) return -1;
       if (!a.dueDate && b.dueDate) return 1;
       if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-      // Then by creation date (newest first)
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
@@ -102,6 +155,7 @@ export async function POST(request: NextRequest) {
       tags,
       isRecurring,
       recurRule,
+      folderName,
     } = body;
 
     if (!title?.trim()) {
@@ -123,6 +177,7 @@ export async function POST(request: NextRequest) {
         tags: tags || "",
         isRecurring: isRecurring || false,
         recurRule: recurRule || null,
+        folderName: folderName?.trim() || null,
         userId,
       },
       include: { category: true },
