@@ -21,16 +21,12 @@ import { marked } from "marked";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   DragStartEvent, DragEndEvent, DragOverEvent, DragOverlay,
+  useDraggable, useDroppable,
 } from "@dnd-kit/core";
-import {
-  SortableContext, verticalListSortingStrategy, useSortable,
-  arrayMove,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import {
   TreeNode, TreeJson,
   readTreeJson, writeTreeJson, ensureTreeJson, moveTreeNode,
-  unchildTreeNode, addTreeNode, deleteTreeNode, renameTreeNode,
+  unchildTreeNode, unchildOnlySelf, addTreeNode, deleteTreeNode, renameTreeNode,
   getChildren, getDescendantIds,
   saveDirectoryHandle, loadDirectoryHandle, requestPermission, checkPermission,
 } from "@/lib/fileSystem";
@@ -976,8 +972,8 @@ interface LocalFile {
   content?: string;
 }
 
-/* ═══════════ SORTABLE TREE NODE ITEM ═══════════ */
-function SortableTreeNodeItem({
+/* ═══════════ DRAGGABLE TREE NODE ITEM ═══════════ */
+function DraggableTreeNodeItem({
   node,
   depth,
   tree,
@@ -1001,25 +997,36 @@ function SortableTreeNodeItem({
   const [renameValue, setRenameValue] = useState(node.title);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
+  // Draggable: this node can be dragged to another node to become its child
   const {
     attributes,
     listeners,
-    setNodeRef,
-    transform,
-    transition,
+    setNodeRef: setDragRef,
     isDragging,
-  } = useSortable({ id: node.id, data: { node, depth } });
+  } = useDraggable({
+    id: node.id,
+    data: { node, depth },
+  });
+
+  // Droppable: other nodes can be dropped ON this node, making them children
+  const {
+    setNodeRef: setDropRef,
+    isOver,
+  } = useDroppable({
+    id: `drop-${node.id}`,
+    data: { node },
+  });
+
+  // Combine refs: the same element is both a drag source and a drop target
+  const combinedRef = useCallback((el: HTMLDivElement | null) => {
+    setDragRef(el);
+    setDropRef(el);
+  }, [setDragRef, setDropRef]);
 
   const children = getChildren(tree.nodes, node.id);
   const isSelected = selectedFileTitle === node.title;
   const hasChildren = children.length > 0;
-  const isDragOver = dragOverId === node.id;
-
-  const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
-  };
+  const isDragOver = dragOverId === node.id || isOver;
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1049,7 +1056,14 @@ function SortableTreeNodeItem({
     onTreeUpdate(updated);
   };
 
+  // Unchild only this node — detach from parent but keep children attached
   const handleUnchild = async () => {
+    const updated = await unchildOnlySelf(dirHandle, tree, node.id);
+    onTreeUpdate(updated);
+  };
+
+  // Go to Root — detach this node AND all its descendants, move everything to root
+  const handleGoToRoot = async () => {
     const updated = await unchildTreeNode(dirHandle, tree, node.id);
     onTreeUpdate(updated);
   };
@@ -1072,12 +1086,11 @@ function SortableTreeNodeItem({
   const isVirtualParent = hasChildren;
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={combinedRef} style={{ opacity: isDragging ? 0.3 : 1 }}>
       <div
         className={`group flex items-center gap-1 py-1 px-1 rounded-md text-xs cursor-pointer transition-colors
           ${isSelected ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300" : "hover:bg-accent"}
-          ${isDragging ? "ring-1 ring-emerald-400" : ""}
-          ${isDragOver ? "bg-blue-50 dark:bg-blue-950/30 ring-1 ring-blue-400" : ""}`}
+          ${isDragOver && !isDragging ? "bg-blue-50 dark:bg-blue-950/30 ring-2 ring-blue-400 ring-offset-1" : ""}`}
         style={{ paddingLeft: `${depth * 16 + 4}px` }}
         onClick={handleToggle}
         onContextMenu={handleContextMenu}
@@ -1129,7 +1142,7 @@ function SortableTreeNodeItem({
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[160px] text-xs"
+          className="fixed z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[180px] text-xs"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { setRenaming(true); setContextMenu(null); }}>
@@ -1140,7 +1153,7 @@ function SortableTreeNodeItem({
               <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
                 <CornerDownLeft className="w-3 h-3" /> Unchild from Parent
               </button>
-              <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleGoToRoot(); setContextMenu(null); }}>
                 <ArrowUpRight className="w-3 h-3" /> Go to Root
               </button>
             </>
@@ -1151,23 +1164,21 @@ function SortableTreeNodeItem({
         </div>
       )}
 
-      {/* Children */}
+      {/* Children — recursively render child nodes */}
       {expanded && hasChildren && (
-        <SortableContext items={children.map(c => c.id)} strategy={verticalListSortingStrategy}>
-          {children.map((child) => (
-            <SortableTreeNodeItem
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              tree={tree}
-              dirHandle={dirHandle}
-              onSelectFile={onSelectFile}
-              selectedFileTitle={selectedFileTitle}
-              onTreeUpdate={onTreeUpdate}
-              dragOverId={dragOverId}
-            />
-          ))}
-        </SortableContext>
+        children.map((child) => (
+          <DraggableTreeNodeItem
+            key={child.id}
+            node={child}
+            depth={depth + 1}
+            tree={tree}
+            dirHandle={dirHandle}
+            onSelectFile={onSelectFile}
+            selectedFileTitle={selectedFileTitle}
+            onTreeUpdate={onTreeUpdate}
+            dragOverId={dragOverId}
+          />
+        ))
       )}
     </div>
   );
@@ -1195,25 +1206,24 @@ function TreePanel({
   );
 
   const rootNodes = getChildren(tree.nodes, null);
-  const flattenedIds = useMemo(() => {
-    const ids: string[] = [];
-    const addWithChildren = (parentId: string | null) => {
-      const children = getChildren(tree.nodes, parentId);
-      for (const child of children) {
-        ids.push(child.id);
-        addWithChildren(child.id);
-      }
-    };
-    addWithChildren(null);
-    return ids;
-  }, [tree.nodes]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
   };
 
   const handleDragOver = (event: DragOverEvent) => {
-    setOverId(event.over?.id as string ?? null);
+    const over = event.over;
+    if (over) {
+      // Extract node ID from droppable ID (format: "drop-{nodeId}")
+      const overIdStr = over.id.toString();
+      if (overIdStr.startsWith("drop-")) {
+        setOverId(overIdStr.replace("drop-", ""));
+      } else {
+        setOverId(null);
+      }
+    } else {
+      setOverId(null);
+    }
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -1222,27 +1232,40 @@ function TreePanel({
     setOverId(null);
 
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (!over) return;
 
-    const activeNode = tree.nodes.find(n => n.id === active.id);
-    const overNode = tree.nodes.find(n => n.id === over.id);
+    const activeNodeId = active.id as string;
+
+    // Extract target node ID from droppable ID (format: "drop-{nodeId}")
+    let overNodeId: string | null = null;
+    const overIdStr = over.id.toString();
+    if (overIdStr.startsWith("drop-")) {
+      overNodeId = overIdStr.replace("drop-", "");
+    } else {
+      return; // Unknown drop target — ignore
+    }
+
+    // Don't drop on self
+    if (activeNodeId === overNodeId) return;
+
+    const activeNode = tree.nodes.find(n => n.id === activeNodeId);
+    const overNode = tree.nodes.find(n => n.id === overNodeId);
     if (!activeNode || !overNode) return;
 
-    // Don't allow dropping a node into itself
-    if (activeNode.id === overNode.id) return;
+    // Don't allow dropping a parent into its own descendant (prevents circular references)
+    const descendantIds = getDescendantIds(tree.nodes, activeNodeId);
+    if (descendantIds.includes(overNodeId!)) return;
 
-    // Don't allow dropping a parent into its own descendant
-    const descendantIds = getDescendantIds(tree.nodes, activeNode.id);
-    if (descendantIds.includes(overNode.id)) return;
+    // If already a direct child of the target, do nothing
+    if (activeNode.parentId === overNodeId) return;
 
-    // KEY LOGIC: Dropping onto ANY node makes the dragged node a child of that node.
-    // This creates a virtual parent-child hierarchy regardless of physical file structure.
-    // Any file (A.md) can become a parent of other files (x.md, y.md) via DnD.
-    const newParentId = overNode.id;
-    const existingChildren = getChildren(tree.nodes, overNode.id);
-    const newOrder = existingChildren.length; // Append at end
+    // REPARENT: Make the dragged node a child of the drop target.
+    // This is the core DnD operation — any node can become a child of any other node,
+    // creating a virtual parent-child hierarchy that is independent of physical file structure.
+    const existingChildren = getChildren(tree.nodes, overNodeId);
+    const newOrder = existingChildren.length; // Append at end of target's children
 
-    const updated = await moveTreeNode(dirHandle, tree, activeNode.id, newParentId, newOrder);
+    const updated = await moveTreeNode(dirHandle, tree, activeNodeId, overNodeId, newOrder);
     onTreeUpdate(updated);
   };
 
@@ -1273,42 +1296,40 @@ function TreePanel({
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-1">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext items={flattenedIds} strategy={verticalListSortingStrategy}>
-            {rootNodes.map((node) => (
-              <SortableTreeNodeItem
-                key={node.id}
-                node={node}
-                depth={0}
-                tree={tree}
-                dirHandle={dirHandle}
-                onSelectFile={onSelectFile}
-                selectedFileTitle={selectedFileTitle}
-                onTreeUpdate={onTreeUpdate}
-                dragOverId={overId}
-              />
-            ))}
-          </SortableContext>
-          <DragOverlay>
-            {activeId ? (
-              <div className="bg-accent/80 rounded-md px-2 py-1 text-xs flex items-center gap-2 shadow-lg border">
-                <GripVertical className="w-3 h-3" />
-                {tree.nodes.find(n => n.id === activeId)?.title}
-              </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
-        {rootNodes.length === 0 && (
-          <p className="text-[10px] text-muted-foreground text-center py-4">No items in tree</p>
-        )}
-      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex-1 overflow-y-auto p-1">
+          {rootNodes.map((node) => (
+            <DraggableTreeNodeItem
+              key={node.id}
+              node={node}
+              depth={0}
+              tree={tree}
+              dirHandle={dirHandle}
+              onSelectFile={onSelectFile}
+              selectedFileTitle={selectedFileTitle}
+              onTreeUpdate={onTreeUpdate}
+              dragOverId={overId}
+            />
+          ))}
+          {rootNodes.length === 0 && (
+            <p className="text-[10px] text-muted-foreground text-center py-4">No items in tree</p>
+          )}
+        </div>
+        <DragOverlay>
+          {activeId ? (
+            <div className="bg-accent/80 rounded-md px-2 py-1 text-xs flex items-center gap-2 shadow-lg border">
+              <GripVertical className="w-3 h-3" />
+              {tree.nodes.find(n => n.id === activeId)?.title}
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }
