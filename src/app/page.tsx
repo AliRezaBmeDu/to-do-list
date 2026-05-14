@@ -15,9 +15,10 @@ import {
   Video, Phone, PhoneCall, CalendarPlus, X, Shield, Crown,
   Eye, Settings2, UserMinus, UserCheck, Rss,
   Folder, FolderOpen, FileText, File, Image as ImageIcon,
-  ChevronDown, FolderPlus
+  ChevronDown, FolderPlus, Save, Plus as PlusIcon, Pencil, RefreshCw, FolderCog
 } from "lucide-react";
 import { marked } from "marked";
+import { saveDirHandle, getDirHandle, removeDirHandle, restoreDirHandle, requestReadPermission, requestReadWritePermission, checkReadWritePermission, readFileText, writeFileText, createFileInDir, createDirInDir } from "@/lib/fileSystem";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -943,6 +944,10 @@ function isImageFile(name: string): boolean {
   return ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"].includes(ext);
 }
 
+function isEditableFile(name: string): boolean {
+  return isTextFile(name);
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -955,8 +960,23 @@ interface LocalFile {
   size?: number;
   lastModified?: number;
   handle?: FileSystemFileHandle;
+  dirHandle?: FileSystemDirectoryHandle;
   children?: LocalFile[];
   content?: string;
+  parentPath?: string;
+}
+
+// Live markdown preview component using the already-imported `marked`
+function MarkdownLivePreview({ content }: { content: string }) {
+  const [html, setHtml] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    marked(content).then((result) => {
+      if (!cancelled) setHtml(result);
+    });
+    return () => { cancelled = true; };
+  }, [content]);
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function TaskDetailView() {
@@ -970,6 +990,21 @@ function TaskDetailView() {
   const [imageDataUrl, setImageDataUrl] = useState<string>("");
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [folderSaving, setFolderSaving] = useState(false);
+
+  // ─── Edit mode state ────────────────────────────
+  const [editMode, setEditMode] = useState(false);
+  const [editContent, setEditContent] = useState<string>("");
+  const [savingFile, setSavingFile] = useState(false);
+
+  // ─── Permission / restore state ─────────────────
+  const [needsPermission, setNeedsPermission] = useState(false);
+  const [handleRestoring, setHandleRestoring] = useState(false);
+
+  // ─── New file/folder dialog state ────────────────
+  const [newFileDialog, setNewFileDialog] = useState(false);
+  const [newFolderDialog, setNewFolderDialog] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
+  const [creatingFile, setCreatingFile] = useState(false);
 
   if (!selectedTask) return <p className="text-center py-8 text-muted-foreground">No task selected</p>;
 
@@ -986,6 +1021,69 @@ function TaskDetailView() {
     return format(d, "EEEE, MMM d, yyyy");
   })();
 
+  // ─── Restore directory handle from IndexedDB on mount ──
+  useEffect(() => {
+    let cancelled = false;
+    async function restore() {
+      if (!selectedTask?.id) return;
+      setHandleRestoring(true);
+      try {
+        const result = await restoreDirHandle(selectedTask.id);
+        if (cancelled) return;
+        if (result === "needs-permission") {
+          setNeedsPermission(true);
+          // Try to get the handle so we can at least show the folder name
+          const handle = await getDirHandle(selectedTask.id);
+          if (handle) setDirHandle(handle);
+        } else if (result && result !== "needs-permission") {
+          setDirHandle(result);
+          const entries = await readDirectory(result);
+          if (!cancelled) setFiles(entries);
+        }
+      } catch {
+        // Handle not found or permission denied — that's OK
+      }
+      if (!cancelled) setHandleRestoring(false);
+    }
+    restore();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTask?.id]);
+
+  // ─── Grant permission button handler ────────────────
+  const grantPermission = async () => {
+    if (!dirHandle) return;
+    try {
+      const perm = await requestReadPermission(dirHandle);
+      if (perm === "granted") {
+        setNeedsPermission(false);
+        const entries = await readDirectory(dirHandle);
+        setFiles(entries);
+        toast.success("Folder access restored");
+      } else {
+        toast.error("Permission denied. Please allow folder access.");
+      }
+    } catch (err: any) {
+      toast.error("Failed to get permission: " + err.message);
+    }
+  };
+
+  // ─── Grant read-write permission for editing/creating ──
+  const grantReadWritePermission = async (): Promise<boolean> => {
+    if (!dirHandle) return false;
+    try {
+      const currentPerm = await checkReadWritePermission(dirHandle);
+      if (currentPerm === "granted") return true;
+      const perm = await requestReadWritePermission(dirHandle);
+      if (perm === "granted") return true;
+      toast.error("Write permission denied. Please allow access to edit files.");
+      return false;
+    } catch {
+      toast.error("Failed to request write permission.");
+      return false;
+    }
+  };
+
   // Open folder picker using File System Access API
   const openFolderPicker = async () => {
     try {
@@ -993,15 +1091,22 @@ function TaskDetailView() {
         toast.error("Your browser doesn't support local folder access. Please use Chrome or Edge.");
         return;
       }
-      const handle = await (window as any).showDirectoryPicker({ mode: "read" });
+      const handle = await (window as any).showDirectoryPicker({ mode: "readwrite" });
       setDirHandle(handle);
+      setNeedsPermission(false);
       const entries = await readDirectory(handle);
       setFiles(entries);
-      // Save folder name to task
+
+      // Save handle to IndexedDB so it persists
+      if (selectedTask?.id) {
+        await saveDirHandle(selectedTask.id, handle);
+      }
+
+      // Save folder name + path to task in MongoDB
       const folderName = handle.name;
       if (folderName !== selectedTask.folderName) {
         setFolderSaving(true);
-        await updateTask(selectedTask.id, { folderName });
+        await updateTask(selectedTask.id, { folderName, folderPath: handle.name });
         setFolderSaving(false);
         toast.success(`Folder "${folderName}" linked to task`);
       }
@@ -1012,7 +1117,23 @@ function TaskDetailView() {
     }
   };
 
-  // Read directory contents recursively (1 level deep for subdirs)
+  // Detach folder
+  const detachFolder = async () => {
+    if (!selectedTask?.id) return;
+    setDirHandle(null);
+    setFiles([]);
+    setSelectedFile(null);
+    setFileContent("");
+    setRenderedMarkdown("");
+    setImageDataUrl("");
+    setEditMode(false);
+    setNeedsPermission(false);
+    await removeDirHandle(selectedTask.id);
+    await updateTask(selectedTask.id, { folderName: null, folderPath: null });
+    toast.success("Folder detached");
+  };
+
+  // Read directory contents recursively
   const readDirectory = async (dirHandle: FileSystemDirectoryHandle, path: string = ""): Promise<LocalFile[]> => {
     const entries: LocalFile[] = [];
     for await (const [name, handle] of (dirHandle as any).entries()) {
@@ -1025,6 +1146,7 @@ function TaskDetailView() {
           size: file.size,
           lastModified: file.lastModified,
           handle,
+          parentPath: path,
         });
       } else if (handle.kind === "directory") {
         const children = await readDirectory(handle, `${path}${name}/`);
@@ -1032,6 +1154,8 @@ function TaskDetailView() {
           name,
           kind: "directory",
           children,
+          dirHandle: handle,
+          parentPath: path,
         });
       }
     }
@@ -1040,6 +1164,18 @@ function TaskDetailView() {
       if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+  };
+
+  // Refresh file tree
+  const refreshFiles = async () => {
+    if (!dirHandle) return;
+    try {
+      const entries = await readDirectory(dirHandle);
+      setFiles(entries);
+      toast.success("File list refreshed");
+    } catch (err: any) {
+      toast.error("Failed to refresh: " + err.message);
+    }
   };
 
   // Read file content
@@ -1054,6 +1190,7 @@ function TaskDetailView() {
     setFileContent("");
     setRenderedMarkdown("");
     setImageDataUrl("");
+    setEditMode(false);
 
     try {
       const f = await file.handle.getFile();
@@ -1068,6 +1205,7 @@ function TaskDetailView() {
       } else if (isTextFile(file.name)) {
         const text = await f.text();
         setFileContent(text);
+        setEditContent(text);
         if (isMarkdownFile(file.name)) {
           const html = await marked(text);
           setRenderedMarkdown(html);
@@ -1083,6 +1221,71 @@ function TaskDetailView() {
     }
   };
 
+  // ─── Save edited file back to disk ────────────────
+  const saveEditedFile = async () => {
+    if (!selectedFile?.handle) return;
+    const hasWritePerm = await grantReadWritePermission();
+    if (!hasWritePerm) return;
+
+    setSavingFile(true);
+    try {
+      await writeFileText(selectedFile.handle, editContent);
+      setFileContent(editContent);
+      if (isMarkdownFile(selectedFile.name)) {
+        const html = await marked(editContent);
+        setRenderedMarkdown(html);
+      }
+      setEditMode(false);
+      toast.success(`"${selectedFile.name}" saved`);
+    } catch (err: any) {
+      toast.error("Failed to save file: " + err.message);
+    }
+    setSavingFile(false);
+  };
+
+  // ─── Create new file in the attached folder ───────
+  const handleCreateFile = async () => {
+    if (!newFileName.trim() || !dirHandle) return;
+    const hasWritePerm = await grantReadWritePermission();
+    if (!hasWritePerm) return;
+
+    setCreatingFile(true);
+    try {
+      const fileName = newFileName.includes(".") ? newFileName : `${newFileName}.txt`;
+      await createFileInDir(dirHandle, fileName, "");
+      setNewFileDialog(false);
+      setNewFileName("");
+      // Refresh file list
+      const entries = await readDirectory(dirHandle);
+      setFiles(entries);
+      toast.success(`File "${fileName}" created`);
+    } catch (err: any) {
+      toast.error("Failed to create file: " + err.message);
+    }
+    setCreatingFile(false);
+  };
+
+  // ─── Create new folder in the attached folder ─────
+  const handleCreateFolder = async () => {
+    if (!newFileName.trim() || !dirHandle) return;
+    const hasWritePerm = await grantReadWritePermission();
+    if (!hasWritePerm) return;
+
+    setCreatingFile(true);
+    try {
+      await createDirInDir(dirHandle, newFileName);
+      setNewFolderDialog(false);
+      setNewFileName("");
+      // Refresh file list
+      const entries = await readDirectory(dirHandle);
+      setFiles(entries);
+      toast.success(`Folder "${newFileName}" created`);
+    } catch (err: any) {
+      toast.error("Failed to create folder: " + err.message);
+    }
+    setCreatingFile(false);
+  };
+
   const toggleDir = (name: string) => {
     setExpandedDirs((prev) => {
       const next = new Set(prev);
@@ -1095,14 +1298,14 @@ function TaskDetailView() {
   // Render file tree
   const renderFileTree = (items: LocalFile[], depth: number = 0): React.ReactNode => {
     return items.map((item) => {
-      const isSelected = selectedFile?.name === item.name;
+      const isSelected = selectedFile?.name === item.name && selectedFile?.parentPath === item.parentPath;
       if (item.kind === "directory") {
         const isExpanded = expandedDirs.has(item.name);
         return (
-          <div key={item.name}>
+          <div key={`${item.parentPath || ""}${item.name}`}>
             <button
               onClick={() => toggleDir(item.name)}
-              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-accent transition-colors ${depth > 0 ? "ml-" + (depth * 3) : ""}`}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-accent transition-colors`}
               style={{ paddingLeft: `${depth * 16 + 8}px` }}
             >
               {isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
@@ -1116,7 +1319,7 @@ function TaskDetailView() {
       }
       return (
         <button
-          key={item.name}
+          key={`${item.parentPath || ""}${item.name}`}
           onClick={() => openFile(item)}
           className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${isSelected ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300" : "hover:bg-accent"}`}
           style={{ paddingLeft: `${depth * 16 + 20}px` }}
@@ -1157,33 +1360,70 @@ function TaskDetailView() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm flex items-center gap-2"><Folder className="w-4 h-4 text-amber-500" /> Local Folder</CardTitle>
-            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 h-7 text-xs gap-1" onClick={openFolderPicker} disabled={folderSaving}>
-              <FolderPlus className="w-3.5 h-3.5" /> {dirHandle ? "Change Folder" : "Attach Folder"}
-            </Button>
+            <div className="flex items-center gap-1.5">
+              {dirHandle && (
+                <>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={refreshFiles}>
+                    <RefreshCw className="w-3.5 h-3.5" /> Refresh
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-red-500 hover:text-red-600" onClick={detachFolder}>
+                    <X className="w-3.5 h-3.5" /> Detach
+                  </Button>
+                </>
+              )}
+              <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 h-7 text-xs gap-1" onClick={openFolderPicker} disabled={folderSaving}>
+                <FolderPlus className="w-3.5 h-3.5" /> {dirHandle ? "Change" : "Attach Folder"}
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          {dirHandle ? (
+          {handleRestoring ? (
+            <div className="flex items-center justify-center py-6 gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-amber-500" />
+              <span className="text-xs text-muted-foreground">Restoring folder connection...</span>
+            </div>
+          ) : needsPermission && dirHandle ? (
+            <div className="text-center py-6 border-2 border-dashed border-amber-200 dark:border-amber-900 rounded-xl">
+              <FolderCog className="w-8 h-8 mx-auto text-amber-500/60 mb-2" />
+              <p className="text-xs text-muted-foreground">Folder &ldquo;{dirHandle.name}&rdquo; was previously linked</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Click below to re-grant access for this session</p>
+              <Button size="sm" className="mt-3 bg-amber-500 hover:bg-amber-600 h-7 text-xs gap-1" onClick={grantPermission}>
+                <FolderOpen className="w-3.5 h-3.5" /> Grant Access to &ldquo;{dirHandle.name}&rdquo;
+              </Button>
+            </div>
+          ) : dirHandle ? (
             <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
               <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
               <span className="font-medium text-foreground">{dirHandle.name}</span>
-              <span>— {files.length} items</span>
+              <span>&mdash; {files.length} items</span>
+              {selectedTask.folderPath && <span className="text-muted-foreground/60 ml-1">({selectedTask.folderPath})</span>}
               {folderSaving && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
             </div>
           ) : (
             <div className="text-center py-6 border-2 border-dashed rounded-xl">
               <Folder className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
               <p className="text-xs text-muted-foreground">No folder attached</p>
-              <p className="text-[10px] text-muted-foreground mt-1">Click "Attach Folder" to link a local directory</p>
-              <p className="text-[10px] text-muted-foreground/60 mt-0.5">Files stay local — nothing is uploaded to the internet</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Click &ldquo;Attach Folder&rdquo; to link a local directory</p>
+              <p className="text-[10px] text-muted-foreground/60 mt-0.5">Files stay local &mdash; nothing is uploaded to the internet</p>
             </div>
           )}
 
-          {dirHandle && files.length > 0 && (
+          {dirHandle && !needsPermission && files.length > 0 && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-2">
               {/* File tree */}
               <div className="lg:col-span-1 border rounded-xl p-2 max-h-[calc(100vh-420px)] overflow-y-auto">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1 px-2">Files</p>
+                <div className="flex items-center justify-between mb-1 px-2">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Files</p>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setNewFileName(""); setNewFileDialog(true); }} className="p-1 rounded hover:bg-accent transition-colors" title="New File">
+                      <PlusIcon className="w-3 h-3 text-muted-foreground" />
+                    </button>
+                    <button onClick={() => { setNewFileName(""); setNewFolderDialog(true); }} className="p-1 rounded hover:bg-accent transition-colors" title="New Folder">
+                      <FolderPlus className="w-3 h-3 text-muted-foreground" />
+                    </button>
+                  </div>
+                </div>
                 {renderFileTree(files)}
               </div>
 
@@ -1192,16 +1432,68 @@ function TaskDetailView() {
                 {loading ? (
                   <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
                 ) : selectedFile ? (
-                  <div className="h-[calc(100vh-420px)] overflow-auto">
+                  <div className="h-[calc(100vh-420px)] overflow-auto flex flex-col">
                     {/* File header */}
                     <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-3 py-2 flex items-center gap-2">
                       {getFileIcon(selectedFile.name)}
                       <span className="text-xs font-medium truncate flex-1">{selectedFile.name}</span>
                       {selectedFile.size !== undefined && <span className="text-[9px] text-muted-foreground">{formatFileSize(selectedFile.size)}</span>}
+
+                      {/* Edit / Save buttons for text files */}
+                      {isEditableFile(selectedFile.name) && !editMode && (
+                        <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2" onClick={() => { setEditContent(fileContent); setEditMode(true); }}>
+                          <Pencil className="w-3 h-3" /> Edit
+                        </Button>
+                      )}
+                      {editMode && (
+                        <>
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2 text-emerald-600" onClick={saveEditedFile} disabled={savingFile}>
+                            {savingFile ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2" onClick={() => setEditMode(false)}>
+                            Cancel
+                          </Button>
+                        </>
+                      )}
                     </div>
 
                     {/* File content */}
-                    {imageDataUrl ? (
+                    {editMode ? (
+                      <div className="flex-1 flex flex-col">
+                        {isMarkdownFile(selectedFile.name) ? (
+                          /* Split view for markdown: editor left, preview right */
+                          <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 divide-x min-h-0">
+                            <div className="flex flex-col min-h-0">
+                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1 bg-muted/30 border-b">Editor</p>
+                              <textarea
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                className="flex-1 p-3 text-xs font-mono whitespace-pre-wrap break-words bg-background resize-none outline-none min-h-[200px]"
+                                spellCheck={false}
+                              />
+                            </div>
+                            <div className="flex flex-col min-h-0">
+                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1 bg-muted/30 border-b">Preview</p>
+                              <div className="flex-1 p-4 prose prose-sm dark:prose-invert max-w-none overflow-auto">
+                                {editContent ? (
+                                                  <MarkdownLivePreview content={editContent} />
+                                ) : (
+                                  <p className="text-muted-foreground text-xs italic">Start typing to see preview...</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Single editor for non-markdown text files */
+                          <textarea
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            className="flex-1 p-3 text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 resize-none outline-none min-h-[200px]"
+                            spellCheck={false}
+                          />
+                        )}
+                      </div>
+                    ) : imageDataUrl ? (
                       <div className="p-4 flex items-center justify-center min-h-48">
                         <img src={imageDataUrl} alt={selectedFile.name} className="max-w-full max-h-[calc(100vh-500px)] object-contain rounded-lg" />
                       </div>
@@ -1224,11 +1516,63 @@ function TaskDetailView() {
               </div>
             </div>
           )}
+
+          {/* New File Dialog */}
+          <Dialog open={newFileDialog} onOpenChange={setNewFileDialog}>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader><DialogTitle>Create New File</DialogTitle></DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label>File Name</Label>
+                  <Input
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    placeholder="e.g. notes.txt or README.md"
+                    className="h-10"
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCreateFile(); }}
+                  />
+                  <p className="text-[10px] text-muted-foreground">If no extension is provided, .txt will be added automatically.</p>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setNewFileDialog(false)}>Cancel</Button>
+                  <Button onClick={handleCreateFile} disabled={!newFileName.trim() || creatingFile} className="bg-gradient-to-r from-emerald-600 to-teal-600">
+                    {creatingFile ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <PlusIcon className="w-3.5 h-3.5 mr-1" />} Create File
+                  </Button>
+                </DialogFooter>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* New Folder Dialog */}
+          <Dialog open={newFolderDialog} onOpenChange={setNewFolderDialog}>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader><DialogTitle>Create New Folder</DialogTitle></DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label>Folder Name</Label>
+                  <Input
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    placeholder="e.g. src or docs"
+                    className="h-10"
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCreateFolder(); }}
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setNewFolderDialog(false)}>Cancel</Button>
+                  <Button onClick={handleCreateFolder} disabled={!newFileName.trim() || creatingFile} className="bg-gradient-to-r from-emerald-600 to-teal-600">
+                    {creatingFile ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FolderPlus className="w-3.5 h-3.5 mr-1" />} Create Folder
+                  </Button>
+                </DialogFooter>
+              </div>
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
     </div>
   );
 }
+
 
 /* ═══════════ THEME TOGGLE ═══════════ */
 function ThemeToggle() {

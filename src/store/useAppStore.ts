@@ -41,6 +41,7 @@ interface Task {
   projectName?: string | null;
   projectColor?: string | null;
   folderName?: string | null;
+  folderPath?: string | null;
 }
 
 interface Category {
@@ -109,6 +110,8 @@ interface ProjectTask {
   isRecurring: boolean;
   recurRule: string | null;
   completedAt: string | null;
+  folderName?: string | null;
+  folderPath?: string | null;
   assigneeId: string | null;
   assignee: User | null;
   projectId: string;

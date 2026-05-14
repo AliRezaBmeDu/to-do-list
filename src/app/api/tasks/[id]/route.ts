@@ -33,6 +33,8 @@ export async function PUT(
         ...(body.tags !== undefined && { tags: body.tags }),
         ...(body.isRecurring !== undefined && { isRecurring: body.isRecurring }),
         ...(body.recurRule !== undefined && { recurRule: body.recurRule || null }),
+        ...(body.folderName !== undefined && { folderName: body.folderName?.trim() || null }),
+        ...(body.folderPath !== undefined && { folderPath: body.folderPath?.trim() || null }),
         ...(body.status === "done" && !existing.completedAt && { completedAt: new Date().toISOString() }),
         ...(body.status !== "done" && { completedAt: null }),
       },
