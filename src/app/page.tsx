@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useRef, useCallback, CSSProperties } from "react";
 import { useAppStore, ViewMode } from "@/store/useAppStore";
 import { format, isToday, isTomorrow, isYesterday, isSameMonth, parseISO, isValid, startOfMonth, endOfMonth, eachDayOfInterval, getDay, addMonths, subMonths, formatDistanceToNow } from "date-fns";
 import { motion, AnimatePresence } from "framer-motion";
@@ -15,13 +15,25 @@ import {
   Video, Phone, PhoneCall, CalendarPlus, X, Shield, Crown,
   Eye, Settings2, UserMinus, UserCheck, Rss,
   Folder, FolderOpen, FileText, File, Image as ImageIcon,
-  ChevronDown, FolderPlus, Save, Plus as PlusIcon, Pencil, RefreshCw, FolderCog
+  ChevronDown, FolderPlus, FilePlus, GripVertical, CornerDownLeft
 } from "lucide-react";
 import { marked } from "marked";
-import { saveDirHandle, getDirHandle, removeDirHandle, restoreDirHandle, requestReadPermission, requestReadWritePermission, checkReadWritePermission, readFileText, writeFileText, createFileInDir, createDirInDir, readTreeJson, writeTreeJson, generateDefaultTree, buildFileHandleMap, syncTreeWithFiles, TreeNode, TREE_JSON_FILE } from "@/lib/fileSystem";
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  DragStartEvent, DragEndEvent, DragOverEvent, DragOverlay,
+} from "@dnd-kit/core";
+import {
+  SortableContext, verticalListSortingStrategy, useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  TreeNode, TreeJson,
+  readTreeJson, writeTreeJson, ensureTreeJson, moveTreeNode,
+  unchildTreeNode, addTreeNode, deleteTreeNode, renameTreeNode,
+  getChildren, getDescendantIds,
+  saveDirectoryHandle, loadDirectoryHandle, requestPermission, checkPermission,
+} from "@/lib/fileSystem";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -926,11 +938,6 @@ function getFileIcon(name: string) {
   return <File className="w-4 h-4 text-muted-foreground" />;
 }
 
-function getFileIconForId(id: string, fileNameMap: Map<string, string>) {
-  const fname = fileNameMap.get(id) || id;
-  return getFileIcon(fname);
-}
-
 function isTextFile(name: string): boolean {
   const ext = name.split(".").pop()?.toLowerCase() || "";
   return [
@@ -952,138 +959,378 @@ function isImageFile(name: string): boolean {
   return ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"].includes(ext);
 }
 
-function isEditableFile(name: string): boolean {
-  return isTextFile(name);
-}
-
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ─── Sortable Tree Node ────────────────────────────────────────────
+interface LocalFile {
+  name: string;
+  kind: "file" | "directory";
+  size?: number;
+  lastModified?: number;
+  handle?: FileSystemFileHandle;
+  dirHandle?: FileSystemDirectoryHandle;
+  children?: LocalFile[];
+  content?: string;
+}
 
-function SortableTreeNode({
+/* ═══════════ SORTABLE TREE NODE ITEM ═══════════ */
+function SortableTreeNodeItem({
   node,
   depth,
-  selectedNodeId,
-  expandedNodes,
-  onToggleExpand,
-  onSelectNode,
-  fileNameMap,
-  allNodes,
+  tree,
+  dirHandle,
+  onSelectFile,
+  selectedFileTitle,
+  onTreeUpdate,
 }: {
   node: TreeNode;
   depth: number;
-  selectedNodeId: string | null;
-  expandedNodes: Set<string>;
-  onToggleExpand: (id: string) => void;
-  onSelectNode: (node: TreeNode) => void;
-  fileNameMap: Map<string, string>;
-  allNodes: TreeNode[];
+  tree: TreeJson;
+  dirHandle: FileSystemDirectoryHandle;
+  onSelectFile: (title: string, handle: FileSystemFileHandle | null) => void;
+  selectedFileTitle: string | null;
+  onTreeUpdate: (updated: TreeJson) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: node.id });
-  const hasChildren = allNodes.some((n) => n.parentId === node.id);
-  const isExpanded = expandedNodes.has(node.id);
-  const isSelected = selectedNodeId === node.id;
-  const fname = fileNameMap.get(node.id) || `${node.id}.md`;
+  const [expanded, setExpanded] = useState(true);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(node.title);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
-  const style = {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: node.id, data: { node, depth } });
+
+  const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
   };
 
+  const children = getChildren(tree.nodes, node.id);
+  const isSelected = selectedFileTitle === node.title;
+  const hasChildren = children.length > 0;
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (node.isFolder || hasChildren) {
+      setExpanded(!expanded);
+    } else {
+      // Try to find the file handle in the directory and open it
+      onSelectFile(node.title, null);
+    }
+  };
+
+  const handleSelect = () => {
+    if (!node.isFolder && !hasChildren) {
+      onSelectFile(node.title, null);
+    }
+  };
+
+  const handleRename = async () => {
+    if (renameValue.trim() && renameValue !== node.title) {
+      const updated = await renameTreeNode(dirHandle, tree, node.id, renameValue.trim());
+      onTreeUpdate(updated);
+    }
+    setRenaming(false);
+  };
+
+  const handleDelete = async () => {
+    const updated = await deleteTreeNode(dirHandle, tree, node.id);
+    onTreeUpdate(updated);
+  };
+
+  const handleUnchild = async () => {
+    const updated = await unchildTreeNode(dirHandle, tree, node.id);
+    onTreeUpdate(updated);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  // Close context menu on any click
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [contextMenu]);
+
   return (
     <div ref={setNodeRef} style={style}>
       <div
-        {...attributes}
-        {...listeners}
-        className={`flex items-center gap-1.5 py-1 px-2 rounded-lg text-xs cursor-pointer transition-colors select-none ${
-          isSelected
-            ? "bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
-            : "hover:bg-accent"
-        }`}
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={() => onSelectNode(node)}
+        className={`group flex items-center gap-1 py-1 px-1 rounded-md text-xs cursor-pointer transition-colors
+          ${isSelected ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300" : "hover:bg-accent"}
+          ${isDragging ? "ring-1 ring-emerald-400" : ""}`}
+        style={{ paddingLeft: `${depth * 16 + 4}px` }}
+        onClick={handleToggle}
+        onContextMenu={handleContextMenu}
       >
-        {hasChildren ? (
-          <button
-            className="p-0 m-0 bg-transparent border-none cursor-pointer"
-            onClick={(e) => { e.stopPropagation(); onToggleExpand(node.id); }}
-          >
-            {isExpanded
-              ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
-              : <ChevronRight className="w-3 h-3 text-muted-foreground" />
-            }
+        {/* Drag handle */}
+        <button {...attributes} {...listeners} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-grab active:cursor-grabbing p-0.5">
+          <GripVertical className="w-3 h-3 text-muted-foreground" />
+        </button>
+
+        {/* Expand/collapse chevron */}
+        {(node.isFolder || hasChildren) ? (
+          <button onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }} className="p-0">
+            {expanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
           </button>
         ) : (
           <span className="w-3" />
         )}
-        {getFileIcon(fname)}
-        <span className="flex-1 truncate font-medium">{node.title}</span>
+
+        {/* Icon */}
+        {(node.isFolder || hasChildren) ? (
+          expanded ? <FolderOpen className="w-4 h-4 text-amber-500 flex-shrink-0" /> : <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+        ) : (
+          getFileIcon(node.title)
+        )}
+
+        {/* Title (or rename input) */}
+        {renaming ? (
+          <input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={handleRename}
+            onKeyDown={(e) => { if (e.key === "Enter") handleRename(); if (e.key === "Escape") setRenaming(false); }}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 bg-transparent border-b border-emerald-400 outline-none text-xs min-w-0 px-0.5"
+          />
+        ) : (
+          <span className="flex-1 truncate select-none" onClick={handleSelect}>{node.title}</span>
+        )}
+
+        {/* Child count for folders */}
+        {(node.isFolder || hasChildren) && (
+          <span className="text-[9px] text-muted-foreground flex-shrink-0">{children.length}</span>
+        )}
+
+        {/* Unchild button for child nodes */}
+        {node.parentId !== null && (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleUnchild(); }}
+            className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5"
+            title="Move to root level"
+          >
+            <CornerDownLeft className="w-3 h-3 text-muted-foreground" />
+          </button>
+        )}
+      </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[140px] text-xs"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { setRenaming(true); setContextMenu(null); }}>
+            <Edit3 className="w-3 h-3" /> Rename
+          </button>
+          {node.parentId !== null && (
+            <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
+              <CornerDownLeft className="w-3 h-3" /> Move to Root
+            </button>
+          )}
+          <button className="w-full text-left px-3 py-1.5 hover:bg-accent text-red-500 flex items-center gap-2" onClick={() => { handleDelete(); setContextMenu(null); }}>
+            <Trash2 className="w-3 h-3" /> Remove from Tree
+          </button>
+        </div>
+      )}
+
+      {/* Children */}
+      {expanded && hasChildren && (
+        <SortableContext items={children.map(c => c.id)} strategy={verticalListSortingStrategy}>
+          {children.map((child) => (
+            <SortableTreeNodeItem
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              tree={tree}
+              dirHandle={dirHandle}
+              onSelectFile={onSelectFile}
+              selectedFileTitle={selectedFileTitle}
+              onTreeUpdate={onTreeUpdate}
+            />
+          ))}
+        </SortableContext>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════ TREE PANEL (VS Code sidebar style) ═══════════ */
+function TreePanel({
+  tree,
+  dirHandle,
+  onSelectFile,
+  selectedFileTitle,
+  onTreeUpdate,
+}: {
+  tree: TreeJson;
+  dirHandle: FileSystemDirectoryHandle;
+  onSelectFile: (title: string, handle: FileSystemFileHandle | null) => void;
+  selectedFileTitle: string | null;
+  onTreeUpdate: (updated: TreeJson) => void;
+}) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const rootNodes = getChildren(tree.nodes, null);
+  const flattenedIds = useMemo(() => {
+    const ids: string[] = [];
+    const addWithChildren = (parentId: string | null) => {
+      const children = getChildren(tree.nodes, parentId);
+      for (const child of children) {
+        ids.push(child.id);
+        addWithChildren(child.id);
+      }
+    };
+    addWithChildren(null);
+    return ids;
+  }, [tree.nodes]);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    setOverId(event.over?.id as string ?? null);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveId(null);
+    setOverId(null);
+
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const activeNode = tree.nodes.find(n => n.id === active.id);
+    const overNode = tree.nodes.find(n => n.id === over.id);
+    if (!activeNode || !overNode) return;
+
+    // Don't allow dropping a parent into its own descendant
+    const descendantIds = getDescendantIds(tree.nodes, activeNode.id);
+    if (descendantIds.includes(overNode.id)) return;
+
+    // Determine new parent: if over node is a folder, drop inside it
+    // If over node is a file, drop as sibling (same parent)
+    let newParentId: string | null;
+    let newOrder: number;
+
+    if (overNode.isFolder || getChildren(tree.nodes, overNode.id).length > 0) {
+      // Drop inside the folder
+      newParentId = overNode.id;
+      const folderChildren = getChildren(tree.nodes, overNode.id);
+      newOrder = folderChildren.length; // Append at end
+    } else {
+      // Drop as sibling of the over node
+      newParentId = overNode.parentId;
+      newOrder = overNode.order + 1; // Insert after
+    }
+
+    const updated = await moveTreeNode(dirHandle, tree, activeNode.id, newParentId, newOrder);
+    onTreeUpdate(updated);
+  };
+
+  const handleAddNode = async (isFolder: boolean) => {
+    const title = isFolder ? "New Folder" : "new-file.txt";
+    const { tree: updated } = await addTreeNode(dirHandle, tree, title, null, isFolder);
+    onTreeUpdate(updated);
+  };
+
+  const handleRefresh = async () => {
+    const updated = await ensureTreeJson(dirHandle);
+    onTreeUpdate(updated);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-2 py-1.5 border-b">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Explorer</span>
+        <div className="flex items-center gap-1">
+          <button onClick={() => handleAddNode(false)} className="p-1 rounded hover:bg-accent transition-colors" title="New File">
+            <FilePlus className="w-3.5 h-3.5 text-muted-foreground" />
+          </button>
+          <button onClick={() => handleAddNode(true)} className="p-1 rounded hover:bg-accent transition-colors" title="New Folder">
+            <FolderPlus className="w-3.5 h-3.5 text-muted-foreground" />
+          </button>
+          <button onClick={handleRefresh} className="p-1 rounded hover:bg-accent transition-colors" title="Refresh Tree">
+            <svg className="w-3.5 h-3.5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-1">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext items={flattenedIds} strategy={verticalListSortingStrategy}>
+            {rootNodes.map((node) => (
+              <SortableTreeNodeItem
+                key={node.id}
+                node={node}
+                depth={0}
+                tree={tree}
+                dirHandle={dirHandle}
+                onSelectFile={onSelectFile}
+                selectedFileTitle={selectedFileTitle}
+                onTreeUpdate={onTreeUpdate}
+              />
+            ))}
+          </SortableContext>
+          <DragOverlay>
+            {activeId ? (
+              <div className="bg-accent/80 rounded-md px-2 py-1 text-xs flex items-center gap-2 shadow-lg border">
+                <GripVertical className="w-3 h-3" />
+                {tree.nodes.find(n => n.id === activeId)?.title}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+        {rootNodes.length === 0 && (
+          <p className="text-[10px] text-muted-foreground text-center py-4">No items in tree</p>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Live Markdown Preview ──────────────────────────────────────────
-
-function MarkdownLivePreview({ content }: { content: string }) {
-  const [html, setHtml] = useState<string>("");
-  useEffect(() => {
-    let cancelled = false;
-    marked(content).then((result) => {
-      if (!cancelled) setHtml(result);
-    });
-    return () => { cancelled = true; };
-  }, [content]);
-  return <div dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-// ─── Task Detail View ───────────────────────────────────────────────
-
+/* ═══════════ TASK DETAIL VIEW ═══════════ */
 function TaskDetailView() {
   const { selectedTask, setSelectedTask, setCurrentView, updateTask, categories } = useAppStore();
-
-  // ─── Folder & handle state ────────────────────────
   const [dirHandle, setDirHandle] = useState<FileSystemDirectoryHandle | null>(null);
-  const [needsPermission, setNeedsPermission] = useState(false);
-  const [handleRestoring, setHandleRestoring] = useState(false);
-  const [folderSaving, setFolderSaving] = useState(false);
-
-  // ─── Tree state ───────────────────────────────────
-  const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [fileNameMap, setFileNameMap] = useState<Map<string, string>>(new Map());
-  const [fileHandleMap, setFileHandleMap] = useState<Map<string, FileSystemFileHandle>>(new Map());
-
-  // ─── File viewer state ────────────────────────────
+  const [tree, setTree] = useState<TreeJson | null>(null);
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [selectedFileTitle, setSelectedFileTitle] = useState<string | null>(null);
   const [selectedFileHandle, setSelectedFileHandle] = useState<FileSystemFileHandle | null>(null);
-  const [selectedFileName, setSelectedFileName] = useState<string>("");
   const [fileContent, setFileContent] = useState<string>("");
+  const [loading, setLoading] = useState(false);
   const [renderedMarkdown, setRenderedMarkdown] = useState<string>("");
   const [imageDataUrl, setImageDataUrl] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-
-  // ─── Edit mode state ──────────────────────────────
-  const [editMode, setEditMode] = useState(false);
-  const [editContent, setEditContent] = useState<string>("");
-  const [savingFile, setSavingFile] = useState(false);
-
-  // ─── Dialog state ─────────────────────────────────
-  const [newFileDialog, setNewFileDialog] = useState(false);
-  const [newNodeDialog, setNewNodeDialog] = useState(false);
-  const [newItemName, setNewItemName] = useState("");
-  const [newItemParentId, setNewItemParentId] = useState<string | null>(null);
-  const [creatingItem, setCreatingItem] = useState(false);
-
-  // ─── DnD sensors ──────────────────────────────────
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
-  );
+  const [folderSaving, setFolderSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [creatingFile, setCreatingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
 
   if (!selectedTask) return <p className="text-center py-8 text-muted-foreground">No task selected</p>;
 
@@ -1100,104 +1347,29 @@ function TaskDetailView() {
     return format(d, "EEEE, MMM d, yyyy");
   })();
 
-  // ─── Helper: build both maps from directory ───────
-  const buildMaps = async (dh: FileSystemDirectoryHandle) => {
-    const handles = await buildFileHandleMap(dh);
-    setFileHandleMap(handles);
-    const nameMap = new Map<string, string>();
-    for await (const [name, handle] of (dh as any).entries()) {
-      if (name === TREE_JSON_FILE) continue;
-      if (name.startsWith(".")) continue;
-      if (handle.kind === "file") {
-        const id = name.includes(".") ? name.substring(0, name.lastIndexOf(".")) : name;
-        nameMap.set(id, name);
-      }
-    }
-    setFileNameMap(nameMap);
-    return handles;
-  };
-
-  // ─── Load tree from folder ────────────────────────
-  const loadTree = async (dh: FileSystemDirectoryHandle) => {
-    let nodes = await readTreeJson(dh);
-    if (!nodes) {
-      nodes = await generateDefaultTree(dh);
-      await writeTreeJson(dh, nodes);
-    }
-    // Sync with actual files
-    const synced = await syncTreeWithFiles(dh, nodes);
-    setTreeNodes(synced.nodes);
-    // Auto-expand root-level nodes that have children
-    const expandSet = new Set<string>();
-    synced.nodes.forEach((n) => {
-      if (n.parentId === null && synced.nodes.some((c) => c.parentId === n.id)) {
-        expandSet.add(n.id);
-      }
-    });
-    setExpandedNodes(expandSet);
-  };
-
-  // ─── Restore directory handle from IndexedDB on mount ──
+  // Try to restore directory handle from IndexedDB on mount
   useEffect(() => {
-    let cancelled = false;
-    async function restore() {
-      if (!selectedTask?.id) return;
-      setHandleRestoring(true);
-      try {
-        const result = await restoreDirHandle(selectedTask.id);
-        if (cancelled) return;
-        if (result === "needs-permission") {
-          setNeedsPermission(true);
-          const handle = await getDirHandle(selectedTask.id);
-          if (handle) setDirHandle(handle);
-        } else if (result && result !== "needs-permission") {
-          setDirHandle(result);
-          await buildMaps(result);
-          await loadTree(result);
+    if (!selectedTask) return;
+    (async () => {
+      const saved = await loadDirectoryHandle(selectedTask.id);
+      if (saved) {
+        const granted = await checkPermission(saved, "read");
+        if (granted) {
+          setDirHandle(saved);
+          setTreeLoading(true);
+          try {
+            const t = await ensureTreeJson(saved);
+            setTree(t);
+          } catch (err) {
+            console.error("Failed to load tree:", err);
+          }
+          setTreeLoading(false);
         }
-      } catch { /* OK */ }
-      if (!cancelled) setHandleRestoring(false);
-    }
-    restore();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      }
+    })();
   }, [selectedTask?.id]);
 
-  // ─── Grant permission ─────────────────────────────
-  const grantPermission = async () => {
-    if (!dirHandle) return;
-    try {
-      const perm = await requestReadPermission(dirHandle);
-      if (perm === "granted") {
-        setNeedsPermission(false);
-        await buildMaps(dirHandle);
-        await loadTree(dirHandle);
-        toast.success("Folder access restored");
-      } else {
-        toast.error("Permission denied.");
-      }
-    } catch (err: any) {
-      toast.error("Failed: " + err.message);
-    }
-  };
-
-  // ─── Grant read-write permission ──────────────────
-  const grantReadWritePermission = async (): Promise<boolean> => {
-    if (!dirHandle) return false;
-    try {
-      const currentPerm = await checkReadWritePermission(dirHandle);
-      if (currentPerm === "granted") return true;
-      const perm = await requestReadWritePermission(dirHandle);
-      if (perm === "granted") return true;
-      toast.error("Write permission denied.");
-      return false;
-    } catch {
-      toast.error("Failed to request write permission.");
-      return false;
-    }
-  };
-
-  // ─── Open folder picker ───────────────────────────
+  // Open folder picker using File System Access API
   const openFolderPicker = async () => {
     try {
       if (!("showDirectoryPicker" in window)) {
@@ -1206,266 +1378,134 @@ function TaskDetailView() {
       }
       const handle = await (window as any).showDirectoryPicker({ mode: "readwrite" });
       setDirHandle(handle);
-      setNeedsPermission(false);
-      if (selectedTask?.id) await saveDirHandle(selectedTask.id, handle);
+      // Persist handle in IndexedDB
+      await saveDirectoryHandle(selectedTask.id, handle);
+
+      setTreeLoading(true);
+      const t = await ensureTreeJson(handle);
+      setTree(t);
+      setTreeLoading(false);
+
+      // Save folder name to task
       const folderName = handle.name;
       if (folderName !== selectedTask.folderName) {
         setFolderSaving(true);
-        await updateTask(selectedTask.id, { folderName, folderPath: folderName });
+        await updateTask(selectedTask.id, { folderName });
         setFolderSaving(false);
         toast.success(`Folder "${folderName}" linked to task`);
       }
-      await buildMaps(handle);
-      await loadTree(handle);
     } catch (err: any) {
-      if (err.name !== "AbortError") toast.error("Failed: " + err.message);
+      if (err.name !== "AbortError") {
+        toast.error("Failed to open folder: " + err.message);
+      }
     }
   };
 
-  // ─── Detach folder ────────────────────────────────
-  const detachFolder = async () => {
-    if (!selectedTask?.id) return;
-    setDirHandle(null);
-    setTreeNodes([]);
-    setSelectedNodeId(null);
-    setSelectedFileHandle(null);
-    setFileContent("");
-    setRenderedMarkdown("");
-    setImageDataUrl("");
-    setEditMode(false);
-    setNeedsPermission(false);
-    setFileNameMap(new Map());
-    setFileHandleMap(new Map());
-    await removeDirHandle(selectedTask.id);
-    await updateTask(selectedTask.id, { folderName: null, folderPath: null });
-    toast.success("Folder detached");
+  // Request permission if lost
+  const reRequestPermission = async () => {
+    if (!dirHandle) return;
+    const granted = await requestPermission(dirHandle, "readwrite");
+    if (granted) {
+      toast.success("Permission granted");
+      setTreeLoading(true);
+      const t = await ensureTreeJson(dirHandle);
+      setTree(t);
+      setTreeLoading(false);
+    } else {
+      toast.error("Permission denied by browser");
+    }
   };
 
-  // ─── Refresh file list & sync tree ────────────────
-  const refreshFiles = async () => {
+  // Open a file by title — find its handle in the directory
+  const handleSelectFile = async (title: string, _handle: FileSystemFileHandle | null) => {
     if (!dirHandle) return;
     try {
-      await buildMaps(dirHandle);
-      await loadTree(dirHandle);
-      toast.success("Refreshed");
-    } catch (err: any) {
-      toast.error("Failed: " + err.message);
-    }
-  };
+      const fileHandle = await dirHandle.getFileHandle(title);
+      setSelectedFileTitle(title);
+      setSelectedFileHandle(fileHandle);
+      setEditing(false);
+      setEditContent("");
+      setLoading(true);
+      setRenderedMarkdown("");
+      setImageDataUrl("");
 
-  // ─── Select a tree node and open the file ─────────
-  const selectNode = async (node: TreeNode) => {
-    setSelectedNodeId(node.id);
-    const handle = fileHandleMap.get(node.id);
-    if (!handle) {
-      setFileContent(`[File not found in folder: ${node.id}]`);
-      return;
-    }
-    const fname = fileNameMap.get(node.id) || `${node.id}`;
-    setSelectedFileHandle(handle);
-    setSelectedFileName(fname);
-    setEditMode(false);
-    setLoading(true);
-    setFileContent("");
-    setRenderedMarkdown("");
-    setImageDataUrl("");
-    try {
-      const f = await handle.getFile();
-      if (isImageFile(fname)) {
+      const f = await fileHandle.getFile();
+
+      if (isImageFile(title)) {
         const reader = new FileReader();
-        reader.onload = () => { setImageDataUrl(reader.result as string); setLoading(false); };
+        reader.onload = () => {
+          setImageDataUrl(reader.result as string);
+          setLoading(false);
+        };
         reader.readAsDataURL(f);
-      } else if (isTextFile(fname)) {
+      } else if (isTextFile(title)) {
         const text = await f.text();
         setFileContent(text);
-        setEditContent(text);
-        if (isMarkdownFile(fname)) {
-          const html = await marked(text);
+        if (isMarkdownFile(title)) {
+          const html = marked.parse(text) as string;
           setRenderedMarkdown(html);
         }
         setLoading(false);
       } else {
-        setFileContent(`[Binary file: ${fname}]\nSize: ${formatFileSize(f.size)}\n\nThis file type cannot be displayed as text.`);
+        setFileContent(`[Binary file: ${title}]\nSize: ${formatFileSize(f.size)}\n\nThis file type cannot be displayed as text.`);
         setLoading(false);
       }
     } catch (err: any) {
-      setFileContent(`Error reading file: ${err.message}`);
+      toast.error("Cannot open file: " + err.message);
       setLoading(false);
     }
   };
 
-  // ─── Save edited file back to disk ────────────────
-  const saveEditedFile = async () => {
-    if (!selectedFileHandle) return;
-    const hasWritePerm = await grantReadWritePermission();
-    if (!hasWritePerm) return;
-    setSavingFile(true);
+  // Save edited content back to disk
+  const saveFile = async () => {
+    if (!dirHandle || !selectedFileTitle || !editing) return;
     try {
-      await writeFileText(selectedFileHandle, editContent);
+      const fileHandle = await dirHandle.getFileHandle(selectedFileTitle);
+      const writable = await fileHandle.createWritable();
+      await writable.write(editContent);
+      await writable.close();
       setFileContent(editContent);
-      if (isMarkdownFile(selectedFileName)) {
-        const html = await marked(editContent);
+      if (isMarkdownFile(selectedFileTitle)) {
+        const html = marked.parse(editContent) as string;
         setRenderedMarkdown(html);
       }
-      setEditMode(false);
-      toast.success(`"${selectedFileName}" saved`);
+      setEditing(false);
+      setEditContent("");
+      toast.success("File saved");
     } catch (err: any) {
       toast.error("Failed to save: " + err.message);
     }
-    setSavingFile(false);
   };
 
-  // ─── Toggle expand/collapse ───────────────────────
-  const toggleExpand = (id: string) => {
-    setExpandedNodes((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
-
-  // ─── Save tree JSON to disk ───────────────────────
-  const persistTree = async (nodes: TreeNode[]) => {
-    if (!dirHandle) return;
-    try {
-      const hasWritePerm = await grantReadWritePermission();
-      if (!hasWritePerm) return;
-      await writeTreeJson(dirHandle, nodes);
-    } catch (err: any) {
-      toast.error("Failed to save tree: " + err.message);
-    }
-  };
-
-  // ─── DnD: handle drag end ─────────────────────────
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const activeId = String(active.id);
-    const overId = String(over.id);
-    const activeNode = treeNodes.find((n) => n.id === activeId);
-    const overNode = treeNodes.find((n) => n.id === overId);
-    if (!activeNode || !overNode) return;
-
-    // Move activeNode under overNode (as a child)
-    const siblings = treeNodes.filter((n) => n.parentId === overNode.id);
-    const maxOrder = siblings.length > 0 ? Math.max(...siblings.map((s) => s.order)) + 1 : 0;
-
-    // Check: don't create circular references (descendant → ancestor)
-    let isDescendant = false;
-    let checkId: string | null = overNode.id;
-    while (checkId) {
-      if (checkId === activeId) { isDescendant = true; break; }
-      checkId = treeNodes.find((n) => n.id === checkId)?.parentId || null;
-    }
-    if (isDescendant) {
-      toast.error("Cannot move a node into its own descendant");
-      return;
-    }
-
-    const newNodes = treeNodes.map((n) => {
-      if (n.id === activeId) {
-        return { ...n, parentId: overNode.id, order: maxOrder };
-      }
-      return n;
-    });
-
-    setTreeNodes(newNodes);
-    setExpandedNodes((prev) => new Set(prev).add(overNode.id));
-    persistTree(newNodes);
-    toast.success(`Moved "${activeNode.title}" under "${overNode.title}"`);
-  };
-
-  // ─── Create new file + node ───────────────────────
+  // Create new file in the folder
   const handleCreateFile = async () => {
-    if (!newItemName.trim() || !dirHandle) return;
-    const hasWritePerm = await grantReadWritePermission();
-    if (!hasWritePerm) return;
-    setCreatingItem(true);
+    if (!dirHandle || !newFileName.trim()) return;
     try {
-      const fileName = newItemName.includes(".") ? newItemName : `${newItemName}.md`;
-      const nodeId = fileName.includes(".") ? fileName.substring(0, fileName.lastIndexOf(".")) : fileName;
-      await createFileInDir(dirHandle, fileName, "");
-      // Add node to tree
-      const siblings = treeNodes.filter((n) => n.parentId === newItemParentId);
-      const maxOrder = siblings.length > 0 ? Math.max(...siblings.map((s) => s.order)) + 1 : 0;
-      const newNode: TreeNode = { id: nodeId, title: nodeId, parentId: newItemParentId, order: maxOrder };
-      const newNodes = [...treeNodes, newNode];
-      setTreeNodes(newNodes);
-      await persistTree(newNodes);
-      // Rebuild maps
-      await buildMaps(dirHandle);
-      setNewFileDialog(false);
-      setNewItemName("");
-      toast.success(`"${fileName}" created`);
-    } catch (err: any) {
-      toast.error("Failed: " + err.message);
-    }
-    setCreatingItem(false);
-  };
+      const name = newFileName.trim();
+      const fileHandle = await dirHandle.getFileHandle(name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write("");
+      await writable.close();
 
-  // ─── Create new node (virtual, no file) ───────────
-  const handleCreateNode = async () => {
-    if (!newItemName.trim() || !dirHandle) return;
-    const hasWritePerm = await grantReadWritePermission();
-    if (!hasWritePerm) return;
-    setCreatingItem(true);
-    try {
-      const nodeId = newItemName.trim();
-      // Check for duplicate
-      if (treeNodes.some((n) => n.id === nodeId)) {
-        toast.error(`Node "${nodeId}" already exists`);
-        setCreatingItem(false);
-        return;
+      // Add to tree
+      if (tree) {
+        const isFolder = !name.includes(".");
+        const { tree: updated } = await addTreeNode(dirHandle, tree, name, null, isFolder);
+        setTree(updated);
       }
-      const siblings = treeNodes.filter((n) => n.parentId === newItemParentId);
-      const maxOrder = siblings.length > 0 ? Math.max(...siblings.map((s) => s.order)) + 1 : 0;
-      const newNode: TreeNode = { id: nodeId, title: nodeId, parentId: newItemParentId, order: maxOrder };
-      const newNodes = [...treeNodes, newNode];
-      setTreeNodes(newNodes);
-      await persistTree(newNodes);
-      if (newItemParentId) setExpandedNodes((prev) => new Set(prev).add(newItemParentId));
-      setNewNodeDialog(false);
-      setNewItemName("");
-      toast.success(`Node "${nodeId}" created`);
+
+      setNewFileName("");
+      setCreatingFile(false);
+      toast.success(`Created ${name}`);
     } catch (err: any) {
-      toast.error("Failed: " + err.message);
+      toast.error("Failed to create file: " + err.message);
     }
-    setCreatingItem(false);
   };
 
-  // ─── Render tree recursively ──────────────────────
-  const renderTreeLevel = (parentId: string | null, depth: number): React.ReactNode => {
-    const children = treeNodes
-      .filter((n) => n.parentId === parentId)
-      .sort((a, b) => a.order - b.order);
-    if (children.length === 0) return null;
-
-    return (
-      <SortableContext items={children.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-        {children.map((node) => (
-          <React.Fragment key={node.id}>
-            <SortableTreeNode
-              node={node}
-              depth={depth}
-              selectedNodeId={selectedNodeId}
-              expandedNodes={expandedNodes}
-              onToggleExpand={toggleExpand}
-              onSelectNode={selectNode}
-              fileNameMap={fileNameMap}
-              allNodes={treeNodes}
-            />
-            {expandedNodes.has(node.id) && renderTreeLevel(node.id, depth + 1)}
-          </React.Fragment>
-        ))}
-      </SortableContext>
-    );
+  // Handle tree update from DnD or other mutations
+  const handleTreeUpdate = (updated: TreeJson) => {
+    setTree(updated);
   };
-
-  // ─── Root-level nodes for DnD context ─────────────
-  const rootNodes = treeNodes
-    .filter((n) => n.parentId === null)
-    .sort((a, b) => a.order - b.order);
 
   return (
     <div className="space-y-4">
@@ -1495,194 +1535,131 @@ function TaskDetailView() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm flex items-center gap-2"><Folder className="w-4 h-4 text-amber-500" /> Local Folder</CardTitle>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
               {dirHandle && (
-                <>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={refreshFiles}><RefreshCw className="w-3.5 h-3.5" /> Refresh</Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-red-500 hover:text-red-600" onClick={detachFolder}><X className="w-3.5 h-3.5" /> Detach</Button>
-                </>
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={reRequestPermission}>
+                  <Shield className="w-3 h-3" /> Re-authorize
+                </Button>
               )}
               <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 h-7 text-xs gap-1" onClick={openFolderPicker} disabled={folderSaving}>
-                <FolderPlus className="w-3.5 h-3.5" /> {dirHandle ? "Change" : "Attach Folder"}
+                <FolderPlus className="w-3.5 h-3.5" /> {dirHandle ? "Change Folder" : "Attach Folder"}
               </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {handleRestoring ? (
-            <div className="flex items-center justify-center py-6 gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-amber-500" />
-              <span className="text-xs text-muted-foreground">Restoring folder connection...</span>
-            </div>
-          ) : needsPermission && dirHandle ? (
-            <div className="text-center py-6 border-2 border-dashed border-amber-200 dark:border-amber-900 rounded-xl">
-              <FolderCog className="w-8 h-8 mx-auto text-amber-500/60 mb-2" />
-              <p className="text-xs text-muted-foreground">Folder &ldquo;{dirHandle.name}&rdquo; was previously linked</p>
-              <p className="text-[10px] text-muted-foreground mt-1">Click below to re-grant access</p>
-              <Button size="sm" className="mt-3 bg-amber-500 hover:bg-amber-600 h-7 text-xs gap-1" onClick={grantPermission}>
-                <FolderOpen className="w-3.5 h-3.5" /> Grant Access
-              </Button>
-            </div>
-          ) : dirHandle && treeNodes.length > 0 ? (
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-2">
-              {/* ─── Tree Panel (left, 1/4 width) ─── */}
-              <div className="lg:col-span-1 border rounded-xl flex flex-col max-h-[calc(100vh-420px)]">
-                <div className="flex items-center justify-between px-2 py-1.5 border-b bg-muted/20">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Explorer</p>
-                  <div className="flex gap-0.5">
-                    <button
-                      onClick={() => { setNewItemName(""); setNewItemParentId(null); setNewFileDialog(true); }}
-                      className="p-1 rounded hover:bg-accent transition-colors" title="New File"
-                    ><PlusIcon className="w-3 h-3 text-muted-foreground" /></button>
-                    <button
-                      onClick={() => { setNewItemName(""); setNewItemParentId(null); setNewNodeDialog(true); }}
-                      className="p-1 rounded hover:bg-accent transition-colors" title="New Node"
-                    ><FolderPlus className="w-3 h-3 text-muted-foreground" /></button>
-                  </div>
-                </div>
-                <div className="flex-1 overflow-y-auto p-1">
-                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                    <SortableContext items={rootNodes.map((n) => n.id)} strategy={verticalListSortingStrategy}>
-                      {renderTreeLevel(null, 0)}
-                    </SortableContext>
-                  </DndContext>
-                  {treeNodes.length === 0 && (
-                    <p className="text-[10px] text-muted-foreground text-center py-4">No files found</p>
-                  )}
-                </div>
-                <div className="px-2 py-1 border-t bg-muted/20">
-                  <p className="text-[9px] text-muted-foreground">{dirHandle.name} &middot; {treeNodes.length} items &middot; <span className="text-muted-foreground/60">Drag onto node to nest</span></p>
-                </div>
-              </div>
-
-              {/* ─── File Viewer (right, 3/4 width) ─── */}
-              <div className="lg:col-span-3 border rounded-xl overflow-hidden">
-                {loading ? (
-                  <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
-                ) : selectedFileHandle ? (
-                  <div className="h-[calc(100vh-420px)] overflow-auto flex flex-col">
-                    {/* File header */}
-                    <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b px-3 py-2 flex items-center gap-2">
-                      {getFileIcon(selectedFileName)}
-                      <span className="text-xs font-medium truncate flex-1">{selectedFileName}</span>
-                      {isEditableFile(selectedFileName) && !editMode && (
-                        <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2" onClick={() => { setEditContent(fileContent); setEditMode(true); }}>
-                          <Pencil className="w-3 h-3" /> Edit
-                        </Button>
-                      )}
-                      {editMode && (
-                        <>
-                          <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2 text-emerald-600" onClick={saveEditedFile} disabled={savingFile}>
-                            {savingFile ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} Save
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 px-2" onClick={() => setEditMode(false)}>Cancel</Button>
-                        </>
-                      )}
-                    </div>
-
-                    {/* File content */}
-                    {editMode ? (
-                      <div className="flex-1 flex flex-col">
-                        {isMarkdownFile(selectedFileName) ? (
-                          <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 divide-x min-h-0">
-                            <div className="flex flex-col min-h-0">
-                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1 bg-muted/30 border-b">Editor</p>
-                              <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} className="flex-1 p-3 text-xs font-mono whitespace-pre-wrap break-words bg-background resize-none outline-none min-h-[200px]" spellCheck={false} />
-                            </div>
-                            <div className="flex flex-col min-h-0">
-                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-3 py-1 bg-muted/30 border-b">Preview</p>
-                              <div className="flex-1 p-4 prose prose-sm dark:prose-invert max-w-none overflow-auto">
-                                {editContent ? <MarkdownLivePreview content={editContent} /> : <p className="text-muted-foreground text-xs italic">Start typing to see preview...</p>}
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} className="flex-1 p-3 text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 resize-none outline-none min-h-[200px]" spellCheck={false} />
-                        )}
-                      </div>
-                    ) : imageDataUrl ? (
-                      <div className="p-4 flex items-center justify-center min-h-48">
-                        <img src={imageDataUrl} alt={selectedFileName} className="max-w-full max-h-[calc(100vh-500px)] object-contain rounded-lg" />
-                      </div>
-                    ) : renderedMarkdown ? (
-                      <div className="p-4 prose prose-sm dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: renderedMarkdown }} />
-                    ) : (
-                      <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-words text-foreground/90 bg-muted/30 min-h-48">{fileContent}</pre>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-64 text-muted-foreground">
-                    <div className="text-center">
-                      <FileText className="w-8 h-8 mx-auto text-muted-foreground/30 mb-2" />
-                      <p className="text-xs">Select a file from the tree to preview</p>
-                      <p className="text-[10px] text-muted-foreground/60 mt-1">Drag a node onto another to nest it</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : dirHandle ? (
-            <div className="text-center py-6">
-              <p className="text-xs text-muted-foreground">No files found in this folder</p>
-              <Button size="sm" className="mt-3 bg-emerald-600 hover:bg-emerald-700 h-7 text-xs gap-1" onClick={() => { setNewItemName(""); setNewItemParentId(null); setNewFileDialog(true); }}>
-                <PlusIcon className="w-3.5 h-3.5" /> Create First File
-              </Button>
-            </div>
-          ) : (
+          {!dirHandle ? (
             <div className="text-center py-6 border-2 border-dashed rounded-xl">
               <Folder className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
               <p className="text-xs text-muted-foreground">No folder attached</p>
-              <p className="text-[10px] text-muted-foreground mt-1">Click &ldquo;Attach Folder&rdquo; to link a local directory</p>
-              <p className="text-[10px] text-muted-foreground/60 mt-0.5">Files stay local &mdash; nothing is uploaded</p>
+              <p className="text-[10px] text-muted-foreground mt-1">Click "Attach Folder" to link a local directory</p>
+              <p className="text-[10px] text-muted-foreground/60 mt-0.5">Files stay local — nothing is uploaded to the internet</p>
             </div>
+          ) : treeLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-emerald-500" /></div>
+          ) : tree ? (
+            <div className="space-y-2">
+              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+                <span className="font-medium text-foreground">{dirHandle.name}</span>
+                <span>— {tree.nodes.length} items</span>
+                {folderSaving && <Loader2 className="w-3 h-3 animate-spin ml-1" />}
+              </div>
+
+              {/* 2-panel layout: Tree + File Viewer */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                {/* Tree Panel (VS Code sidebar style) */}
+                <div className="lg:col-span-1 border rounded-xl h-[calc(100vh-420px)] overflow-hidden flex flex-col">
+                  <TreePanel
+                    tree={tree}
+                    dirHandle={dirHandle}
+                    onSelectFile={handleSelectFile}
+                    selectedFileTitle={selectedFileTitle}
+                    onTreeUpdate={handleTreeUpdate}
+                  />
+                </div>
+
+                {/* File Viewer */}
+                <div className="lg:col-span-2 border rounded-xl overflow-hidden">
+                  {loading ? (
+                    <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
+                  ) : selectedFileTitle ? (
+                    <div className="h-[calc(100vh-420px)] flex flex-col">
+                      {/* File header */}
+                      <div className="shrink-0 bg-background/95 backdrop-blur-sm border-b px-3 py-2 flex items-center gap-2">
+                        {getFileIcon(selectedFileTitle)}
+                        <span className="text-xs font-medium truncate flex-1">{selectedFileTitle}</span>
+                        {isTextFile(selectedFileTitle) && !editing && (
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => { setEditing(true); setEditContent(fileContent); }}>
+                            <Edit3 className="w-3 h-3" /> Edit
+                          </Button>
+                        )}
+                        {editing && (
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1 text-emerald-600" onClick={saveFile}>
+                              <CheckCircle2 className="w-3 h-3" /> Save
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setEditing(false); setEditContent(""); }}>
+                              <X className="w-3 h-3" /> Cancel
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* File content */}
+                      <div className="flex-1 overflow-auto">
+                        {editing ? (
+                          <div className="h-full flex flex-col">
+                            {isMarkdownFile(selectedFileTitle) ? (
+                              <div className="flex-1 grid grid-cols-2 divide-x h-full">
+                                <textarea
+                                  value={editContent}
+                                  onChange={(e) => setEditContent(e.target.value)}
+                                  className="flex-1 p-3 text-xs font-mono resize-none outline-none bg-muted/20 border-none"
+                                  placeholder="Write markdown..."
+                                />
+                                <div className="p-3 prose prose-sm dark:prose-invert max-w-none overflow-auto" dangerouslySetInnerHTML={{ __html: marked.parse(editContent) as string }} />
+                              </div>
+                            ) : (
+                              <textarea
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                className="flex-1 p-3 text-xs font-mono resize-none outline-none bg-muted/20 min-h-full"
+                              />
+                            )}
+                          </div>
+                        ) : imageDataUrl ? (
+                          <div className="p-4 flex items-center justify-center min-h-48">
+                            <img src={imageDataUrl} alt={selectedFileTitle} className="max-w-full max-h-[calc(100vh-500px)] object-contain rounded-lg" />
+                          </div>
+                        ) : renderedMarkdown ? (
+                          <div className="p-4 prose prose-sm dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: renderedMarkdown }} />
+                        ) : (
+                          <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-words text-foreground/90 bg-muted/30 min-h-48">
+                            {fileContent}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-64 text-muted-foreground">
+                      <div className="text-center">
+                        <FileText className="w-8 h-8 mx-auto text-muted-foreground/30 mb-2" />
+                        <p className="text-xs">Select a file to preview</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-4 text-xs text-muted-foreground">No tree data available</div>
           )}
-
-          {/* New File Dialog */}
-          <Dialog open={newFileDialog} onOpenChange={setNewFileDialog}>
-            <DialogContent className="sm:max-w-sm">
-              <DialogHeader><DialogTitle>Create New File</DialogTitle></DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-2">
-                  <Label>File Name</Label>
-                  <Input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="e.g. notes.txt or README.md" className="h-10" onKeyDown={(e) => { if (e.key === "Enter") handleCreateFile(); }} />
-                  <p className="text-[10px] text-muted-foreground">If no extension, .md will be added. The file is created in the attached folder.</p>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setNewFileDialog(false)}>Cancel</Button>
-                  <Button onClick={handleCreateFile} disabled={!newItemName.trim() || creatingItem} className="bg-gradient-to-r from-emerald-600 to-teal-600">
-                    {creatingItem ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <PlusIcon className="w-3.5 h-3.5 mr-1" />} Create File
-                  </Button>
-                </DialogFooter>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* New Node Dialog (virtual node, no file) */}
-          <Dialog open={newNodeDialog} onOpenChange={setNewNodeDialog}>
-            <DialogContent className="sm:max-w-sm">
-              <DialogHeader><DialogTitle>Create Node (Group)</DialogTitle></DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-2">
-                  <Label>Node Name</Label>
-                  <Input value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="e.g. Chapter 1 or Research" className="h-10" onKeyDown={(e) => { if (e.key === "Enter") handleCreateNode(); }} />
-                  <p className="text-[10px] text-muted-foreground">A virtual node for grouping. No file is created. Other nodes can be dragged into it.</p>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setNewNodeDialog(false)}>Cancel</Button>
-                  <Button onClick={handleCreateNode} disabled={!newItemName.trim() || creatingItem} className="bg-gradient-to-r from-emerald-600 to-teal-600">
-                    {creatingItem ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <FolderPlus className="w-3.5 h-3.5 mr-1" />} Create Node
-                  </Button>
-                </DialogFooter>
-              </div>
-            </DialogContent>
-          </Dialog>
         </CardContent>
       </Card>
     </div>
   );
 }
-
-
 
 /* ═══════════ THEME TOGGLE ═══════════ */
 function ThemeToggle() {

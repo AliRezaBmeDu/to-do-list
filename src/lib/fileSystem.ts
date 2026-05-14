@@ -1,349 +1,519 @@
 /**
- * File System Access API utilities for persisting directory handles
- * in IndexedDB so users don't need to re-attach folders on every visit.
+ * fileSystem.ts — Utilities for local folder access, IndexedDB persistence,
+ * and .taskflow-tree.json virtual tree hierarchy management.
  *
- * Flow:
- *  1. User picks a folder → handle stored in IndexedDB keyed by taskId
- *  2. On page load, we try to retrieve the handle from IndexedDB
- *  3. We call handle.requestPermission() — user clicks "Allow" once per session
- *  4. If granted, we can read the directory without re-picking
+ * Tree JSON schema: { version: 1, nodes: TreeNode[] }
+ * TreeNode: { id: string, title: string, parentId: string | null, order: number, isFolder?: boolean }
  */
 
-const DB_NAME = "TaskFlowFS";
-const STORE_NAME = "dirHandles";
-const DB_VERSION = 1;
+/* ═══════════════════════════════════════════
+   Types
+   ═══════════════════════════════════════════ */
 
-// ─── IndexedDB helpers ────────────────────────────────────────────────
+export interface TreeNode {
+  id: string;
+  title: string;
+  parentId: string | null;
+  order: number;
+  isFolder?: boolean;
+}
+
+export interface TreeJson {
+  version: number;
+  nodes: TreeNode[];
+}
+
+/* ═══════════════════════════════════════════
+   Constants
+   ═══════════════════════════════════════════ */
+
+const TREE_JSON_FILENAME = ".taskflow-tree.json";
+const DB_NAME = "taskflow-fs";
+const DB_VERSION = 1;
+const HANDLE_STORE = "dirHandles";
+
+/* ═══════════════════════════════════════════
+   IndexedDB — Directory Handle Persistence
+   ═══════════════════════════════════════════ */
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(HANDLE_STORE)) {
+        db.createObjectStore(HANDLE_STORE);
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
 }
 
-/**
- * Save a FileSystemDirectoryHandle in IndexedDB, keyed by taskId.
- */
-export async function saveDirHandle(
-  taskId: string,
-  handle: FileSystemDirectoryHandle
-): Promise<void> {
+export async function saveDirectoryHandle(taskId: string, handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    store.put(handle, taskId);
+    const tx = db.transaction(HANDLE_STORE, "readwrite");
+    tx.objectStore(HANDLE_STORE).put(handle, taskId);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
 
-/**
- * Retrieve a previously-saved FileSystemDirectoryHandle from IndexedDB.
- */
-export async function getDirHandle(
-  taskId: string
-): Promise<FileSystemDirectoryHandle | null> {
+export async function loadDirectoryHandle(taskId: string): Promise<FileSystemDirectoryHandle | null> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.get(taskId);
-    request.onsuccess = () => resolve(request.result ?? null);
-    request.onerror = () => reject(request.error);
+    const tx = db.transaction(HANDLE_STORE, "readonly");
+    const req = tx.objectStore(HANDLE_STORE).get(taskId);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
   });
 }
 
-/**
- * Remove a stored directory handle (e.g. when user detaches folder).
- */
-export async function removeDirHandle(taskId: string): Promise<void> {
+export async function removeDirectoryHandle(taskId: string): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    store.delete(taskId);
+    const tx = db.transaction(HANDLE_STORE, "readwrite");
+    tx.objectStore(HANDLE_STORE).delete(taskId);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
 
-// ─── Permission helpers ───────────────────────────────────────────────
+/* ═══════════════════════════════════════════
+   Permission Helpers
+   ═══════════════════════════════════════════ */
 
-/**
- * Check if we already have read permission on a handle.
- */
-export async function checkReadPermission(
-  handle: FileSystemDirectoryHandle
-): Promise<PermissionState> {
-  return handle.queryPermission({ mode: "read" });
+export async function requestPermission(
+  handle: FileSystemDirectoryHandle,
+  mode: "read" | "readwrite" = "read"
+): Promise<boolean> {
+  if ((handle as any).requestPermission) {
+    const perm = await (handle as any).requestPermission({ mode });
+    return perm === "granted";
+  }
+  return false;
 }
 
-/**
- * Request read permission on a handle (shows browser prompt).
- * Returns "granted" | "denied" | "prompt".
- */
-export async function requestReadPermission(
-  handle: FileSystemDirectoryHandle
-): Promise<PermissionState> {
-  return handle.requestPermission({ mode: "read" });
+export async function checkPermission(
+  handle: FileSystemDirectoryHandle,
+  mode: "read" | "readwrite" = "read"
+): Promise<boolean> {
+  if ((handle as any).queryPermission) {
+    const perm = await (handle as any).queryPermission({ mode });
+    return perm === "granted";
+  }
+  return false;
 }
 
-/**
- * Request read-write permission on a handle (shows browser prompt).
- * Required for file editing and new file creation.
- */
-export async function requestReadWritePermission(
-  handle: FileSystemDirectoryHandle
-): Promise<PermissionState> {
-  return handle.requestPermission({ mode: "readwrite" });
-}
+/* ═══════════════════════════════════════════
+   File Read / Write Helpers
+   ═══════════════════════════════════════════ */
 
-/**
- * Check if we already have read-write permission on a handle.
- */
-export async function checkReadWritePermission(
-  handle: FileSystemDirectoryHandle
-): Promise<PermissionState> {
-  return handle.queryPermission({ mode: "readwrite" });
-}
-
-/**
- * Try to restore a previously-saved directory handle.
- *  - If permission is already granted → returns handle
- *  - If permission is "prompt" → returns "needs-permission" so the UI can show a button
- *  - If permission is "denied" or handle not found → returns null
- */
-export async function restoreDirHandle(
-  taskId: string
-): Promise<FileSystemDirectoryHandle | "needs-permission" | null> {
+export async function readFileText(
+  dirHandle: FileSystemDirectoryHandle,
+  filePath: string
+): Promise<string | null> {
   try {
-    const handle = await getDirHandle(taskId);
-    if (!handle) return null;
-
-    const perm = await checkReadPermission(handle);
-    if (perm === "granted") return handle;
-    if (perm === "prompt") return "needs-permission";
-
-    return null; // denied
+    const parts = filePath.split("/").filter(Boolean);
+    let current: FileSystemDirectoryHandle = dirHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = await current.getDirectoryHandle(parts[i]);
+    }
+    const fileHandle = await current.getFileHandle(parts[parts.length - 1]);
+    const file = await fileHandle.getFile();
+    return await file.text();
   } catch {
     return null;
   }
 }
 
-// ─── File read/write helpers ──────────────────────────────────────────
-
-/**
- * Read a text file from a FileSystemFileHandle.
- */
-export async function readFileText(
-  handle: FileSystemFileHandle
-): Promise<string> {
-  const file = await handle.getFile();
-  return file.text();
-}
-
-/**
- * Write text content to a file via FileSystemFileHandle.
- * Uses the File System Access API's createWritable() method.
- */
 export async function writeFileText(
-  handle: FileSystemFileHandle,
+  dirHandle: FileSystemDirectoryHandle,
+  filePath: string,
   content: string
-): Promise<void> {
-  const writable = await handle.createWritable();
-  await writable.write(content);
-  await writable.close();
-}
-
-/**
- * Create a new file in a directory and write initial content.
- * Returns the FileSystemFileHandle for the new file.
- */
-export async function createFileInDir(
-  dirHandle: FileSystemDirectoryHandle,
-  fileName: string,
-  content: string = ""
-): Promise<FileSystemFileHandle> {
-  const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-  if (content) {
-    await writeFileText(fileHandle, content);
+): Promise<boolean> {
+  try {
+    const parts = filePath.split("/").filter(Boolean);
+    let current: FileSystemDirectoryHandle = dirHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = await current.getDirectoryHandle(parts[i], { create: true });
+    }
+    const fileHandle = await current.getFileHandle(parts[parts.length - 1], { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    return true;
+  } catch {
+    return false;
   }
-  return fileHandle;
 }
 
-/**
- * Create a new subdirectory in a directory.
- * Returns the FileSystemDirectoryHandle for the new directory.
- */
-export async function createDirInDir(
+export async function createNewFile(
   dirHandle: FileSystemDirectoryHandle,
-  dirName: string
-): Promise<FileSystemDirectoryHandle> {
-  return dirHandle.getDirectoryHandle(dirName, { create: true });
+  name: string,
+  content: string = ""
+): Promise<boolean> {
+  try {
+    const fileHandle = await dirHandle.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-// ─── Virtual Tree JSON helpers (.taskflow-tree.json) ─────────────────
+export async function createNewFolder(
+  dirHandle: FileSystemDirectoryHandle,
+  name: string
+): Promise<boolean> {
+  try {
+    await dirHandle.getDirectoryHandle(name, { create: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-export const TREE_JSON_FILE = ".taskflow-tree.json";
+/* ═══════════════════════════════════════════
+   .taskflow-tree.json — Read / Write / Generate
+   ═══════════════════════════════════════════ */
 
-export interface TreeNode {
-  id: string;       // filename without extension (e.g. "A" for "A.md")
-  title: string;    // display title (usually same as id)
-  parentId: string | null;
-  order: number;
+function generateId(): string {
+  return Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
 }
 
 /**
- * Read the .taskflow-tree.json file from the attached folder.
- * Returns null if the file doesn't exist.
+ * Read the .taskflow-tree.json from the attached folder.
+ * Returns null if the file doesn't exist or is invalid.
  */
 export async function readTreeJson(
   dirHandle: FileSystemDirectoryHandle
-): Promise<TreeNode[] | null> {
+): Promise<TreeJson | null> {
+  const text = await readFileText(dirHandle, TREE_JSON_FILENAME);
+  if (!text) return null;
   try {
-    const fileHandle = await dirHandle.getFileHandle(TREE_JSON_FILE);
-    const file = await fileHandle.getFile();
-    const text = await file.text();
     const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
-    return null;
+    if (parsed && parsed.version === 1 && Array.isArray(parsed.nodes)) {
+      return parsed as TreeJson;
+    }
   } catch {
-    return null;
+    // invalid JSON
   }
+  return null;
 }
 
 /**
- * Write the tree JSON back to the .taskflow-tree.json file in the folder.
+ * Write the tree JSON back to .taskflow-tree.json in the attached folder.
  */
 export async function writeTreeJson(
   dirHandle: FileSystemDirectoryHandle,
-  nodes: TreeNode[]
-): Promise<void> {
-  const fileHandle = await dirHandle.getFileHandle(TREE_JSON_FILE, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(JSON.stringify(nodes, null, 2));
-  await writable.close();
+  tree: TreeJson
+): Promise<boolean> {
+  const json = JSON.stringify(tree, null, 2);
+  return writeFileText(dirHandle, TREE_JSON_FILENAME, json);
 }
 
 /**
- * Generate a default flat tree from the physical files in the directory.
- * All nodes get parentId: null and are ordered alphabetically.
- * Only includes files (not subdirectories), skips hidden files except .taskflow-tree.json.
+ * Scan the directory and generate a default flat tree JSON.
+ * Each file/subdirectory gets a TreeNode with parentId: null (root level),
+ * sorted alphabetically (dirs first, then files).
+ * Subdirectory children are also scanned one level deep.
  */
 export async function generateDefaultTree(
   dirHandle: FileSystemDirectoryHandle
-): Promise<TreeNode[]> {
-  const entries: string[] = [];
-  for await (const [name, handle] of (dirHandle as any).entries()) {
-    if (name === TREE_JSON_FILE) continue; // skip the tree file itself
-    if (name.startsWith(".")) continue;    // skip other hidden files
-    if (handle.kind === "file") {
-      // Store id as filename without extension
-      const id = name.includes(".") ? name.substring(0, name.lastIndexOf(".")) : name;
-      entries.push(id);
+): Promise<TreeJson> {
+  const nodes: TreeNode[] = [];
+  let order = 0;
+
+  const scanDir = async (
+    handle: FileSystemDirectoryHandle,
+    parentId: string | null
+  ): Promise<void> => {
+    const entries: { name: string; kind: "file" | "directory"; handle: any }[] = [];
+
+    for await (const [name, h] of (handle as any).entries()) {
+      // Skip .taskflow-tree.json itself and node_modules
+      if (name === ".taskflow-tree.json") continue;
+      if (name === "node_modules") continue;
+      entries.push({ name, kind: h.kind, handle: h });
     }
-  }
-  entries.sort((a, b) => a.localeCompare(b));
-  return entries.map((id, index) => ({
-    id,
-    title: id,
-    parentId: null,
-    order: index,
-  }));
-}
 
-/**
- * Build a lookup map of physical files in the directory.
- * Key = id (filename without extension), Value = FileSystemFileHandle
- */
-export async function buildFileHandleMap(
-  dirHandle: FileSystemDirectoryHandle
-): Promise<Map<string, FileSystemFileHandle>> {
-  const map = new Map<string, FileSystemFileHandle>();
-  for await (const [name, handle] of (dirHandle as any).entries()) {
-    if (name === TREE_JSON_FILE) continue;
-    if (name.startsWith(".")) continue;
-    if (handle.kind === "file") {
-      const id = name.includes(".") ? name.substring(0, name.lastIndexOf(".")) : name;
-      map.set(id, handle);
-    }
-  }
-  return map;
-}
+    // Sort: directories first, then files, alphabetically
+    entries.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
 
-/**
- * Get the full filename for a node id by finding the matching file in the directory.
- * Returns the first file that matches the id (with any extension).
- */
-export function findFileNameForId(fileMap: Map<string, string>, id: string): string | null {
-  return fileMap.get(id) || null;
-}
-
-/**
- * Sync tree nodes with physical files:
- * - Add nodes for files that don't have one
- * - Remove nodes for files that no longer exist
- * - Preserve existing hierarchy
- */
-export async function syncTreeWithFiles(
-  dirHandle: FileSystemDirectoryHandle,
-  existingNodes: TreeNode[]
-): Promise<{ nodes: TreeNode[]; fileMap: Map<string, FileSystemFileHandle> }> {
-  const fileHandles = await buildFileHandleMap(dirHandle);
-  const existingIds = new Set(existingNodes.map((n) => n.id));
-
-  // Build a map of id -> full filename for display
-  // (fileHandles already has the correct ids)
-
-  // Find new files that need nodes
-  const newNodes: TreeNode[] = [];
-  let maxOrder = existingNodes.reduce((max, n) => (n.parentId === null ? Math.max(max, n.order) : max), -1);
-
-  for (const [id] of fileHandles) {
-    if (!existingIds.has(id)) {
-      maxOrder++;
-      newNodes.push({
+    for (const entry of entries) {
+      const id = generateId();
+      nodes.push({
         id,
-        title: id,
-        parentId: null,
-        order: maxOrder,
+        title: entry.name,
+        parentId,
+        order: order++,
+        isFolder: entry.kind === "directory",
       });
+
+      if (entry.kind === "directory") {
+        await scanDir(entry.handle, id);
+      }
     }
+  };
+
+  await scanDir(dirHandle, null);
+
+  return { version: 1, nodes };
+}
+
+/**
+ * Ensure tree JSON exists — read it, or generate + write it if missing.
+ * Also syncs with physical files: adds new files, removes deleted ones.
+ */
+export async function ensureTreeJson(
+  dirHandle: FileSystemDirectoryHandle
+): Promise<TreeJson> {
+  const existing = await readTreeJson(dirHandle);
+  if (existing) {
+    // Sync: scan current physical files and update tree
+    return syncTreeWithDisk(dirHandle, existing);
   }
+  const generated = await generateDefaultTree(dirHandle);
+  await writeTreeJson(dirHandle, generated);
+  return generated;
+}
 
-  // Remove nodes for files that no longer exist
-  // Also remove children of deleted nodes (cascade)
-  const validIds = new Set(fileHandles.keys());
-  const deletedIds = new Set(existingIds);
+/**
+ * Sync the tree JSON with what's actually on disk.
+ * - Adds new files/folders that aren't in the tree yet
+ * - Removes tree nodes whose physical files no longer exist
+ * - Preserves user-made hierarchy (parent-child) and order
+ */
+async function syncTreeWithDisk(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson
+): Promise<TreeJson> {
+  // Collect all physical file/folder names recursively
+  const physicalNames = new Set<string>();
 
-  // Find all ids that should be removed (not in validIds)
-  for (const id of validIds) {
-    deletedIds.delete(id);
-  }
-
-  // Also cascade: if a parent is deleted, its children become root-level
-  const survivingNodes = existingNodes.filter((n) => validIds.has(n.id));
-  const survivingIds = new Set(survivingNodes.map((n) => n.id));
-
-  // Re-parent orphaned children to root
-  const reParented = survivingNodes.map((n) => {
-    if (n.parentId && !survivingIds.has(n.parentId)) {
-      return { ...n, parentId: null };
+  const collectNames = async (handle: FileSystemDirectoryHandle, prefix: string = "") => {
+    for await (const [name, h] of (handle as any).entries()) {
+      if (name === ".taskflow-tree.json" || name === "node_modules") continue;
+      const fullPath = prefix ? `${prefix}/${name}` : name;
+      physicalNames.add(fullPath);
+      if (h.kind === "directory") {
+        const subDir = await handle.getDirectoryHandle(name);
+        await collectNames(subDir, fullPath);
+      }
     }
-    return n;
+  };
+
+  await collectNames(dirHandle);
+
+  // Build a path map from tree nodes (we need to reconstruct paths)
+  // For simplicity, we'll check by title at each level
+  // Remove nodes whose files no longer exist (by title matching at root level)
+  const beforeCount = tree.nodes.length;
+  tree.nodes = tree.nodes.filter((node) => {
+    // Root nodes — check directly
+    if (node.parentId === null) {
+      return physicalNames.has(node.title);
+    }
+    return true; // Keep child nodes for now (complex path resolution)
   });
 
-  return {
-    nodes: [...reParented, ...newNodes],
-    fileMap: fileHandles,
+  // Add new physical files that aren't in the tree
+  const existingTitles = new Set(tree.nodes.filter(n => n.parentId === null).map(n => n.title));
+  let maxOrder = tree.nodes.reduce((max, n) => Math.max(max, n.order), 0);
+
+  for (const path of physicalNames) {
+    const name = path.split("/")[0]; // root-level name only
+    if (!existingTitles.has(name)) {
+      const isDir = path.includes("/") || tree.nodes.some(n => n.isFolder && n.title === name);
+      tree.nodes.push({
+        id: generateId(),
+        title: name,
+        parentId: null,
+        order: ++maxOrder,
+        isFolder: isDir,
+      });
+      existingTitles.add(name);
+    }
+  }
+
+  if (tree.nodes.length !== beforeCount) {
+    await writeTreeJson(dirHandle, tree);
+  }
+
+  return tree;
+}
+
+/**
+ * Move a node: update its parentId and order. Writes JSON to disk.
+ */
+export async function moveTreeNode(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  nodeId: string,
+  newParentId: string | null,
+  newOrder: number
+): Promise<TreeJson> {
+  const node = tree.nodes.find((n) => n.id === nodeId);
+  if (!node) return tree;
+
+  node.parentId = newParentId;
+  node.order = newOrder;
+
+  // Re-order siblings
+  const siblings = tree.nodes
+    .filter((n) => n.parentId === newParentId && n.id !== nodeId)
+    .sort((a, b) => a.order - b.order);
+
+  // Insert at newOrder position
+  siblings.splice(newOrder, 0, node);
+  siblings.forEach((s, i) => {
+    s.order = i;
+  });
+
+  await writeTreeJson(dirHandle, tree);
+  return tree;
+}
+
+/**
+ * Unchild a node — move it to root level (parentId: null) with given order.
+ */
+export async function unchildTreeNode(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  nodeId: string
+): Promise<TreeJson> {
+  const node = tree.nodes.find((n) => n.id === nodeId);
+  if (!node || node.parentId === null) return tree;
+
+  // Also unchild all descendants to root
+  const descendantIds = new Set<string>();
+  const collectDescendants = (parentId: string) => {
+    tree.nodes.filter(n => n.parentId === parentId).forEach(child => {
+      descendantIds.add(child.id);
+      collectDescendants(child.id);
+    });
   };
+  collectDescendants(nodeId);
+
+  // Move node to root
+  const maxRootOrder = tree.nodes
+    .filter(n => n.parentId === null)
+    .reduce((max, n) => Math.max(max, n.order), 0);
+
+  node.parentId = null;
+  node.order = maxRootOrder + 1;
+
+  // Move descendants to root as well
+  let nextOrder = node.order + 1;
+  descendantIds.forEach(dId => {
+    const desc = tree.nodes.find(n => n.id === dId);
+    if (desc) {
+      desc.parentId = null;
+      desc.order = nextOrder++;
+    }
+  });
+
+  await writeTreeJson(dirHandle, tree);
+  return tree;
+}
+
+/**
+ * Rename a node's title.
+ */
+export async function renameTreeNode(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  nodeId: string,
+  newTitle: string
+): Promise<TreeJson> {
+  const node = tree.nodes.find((n) => n.id === nodeId);
+  if (!node) return tree;
+  node.title = newTitle;
+  await writeTreeJson(dirHandle, tree);
+  return tree;
+}
+
+/**
+ * Add a new node to the tree.
+ */
+export async function addTreeNode(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  title: string,
+  parentId: string | null,
+  isFolder: boolean = false
+): Promise<{ tree: TreeJson; newNode: TreeNode }> {
+  const siblings = tree.nodes.filter(n => n.parentId === parentId);
+  const maxOrder = siblings.reduce((max, n) => Math.max(max, n.order), -1);
+
+  const newNode: TreeNode = {
+    id: generateId(),
+    title,
+    parentId,
+    order: maxOrder + 1,
+    isFolder,
+  };
+
+  tree.nodes.push(newNode);
+  await writeTreeJson(dirHandle, tree);
+  return { tree, newNode };
+}
+
+/**
+ * Delete a node and all its descendants from the tree.
+ */
+export async function deleteTreeNode(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  nodeId: string
+): Promise<TreeJson> {
+  const toDelete = new Set<string>();
+  const collectIds = (id: string) => {
+    toDelete.add(id);
+    tree.nodes.filter(n => n.parentId === id).forEach(child => collectIds(child.id));
+  };
+  collectIds(nodeId);
+
+  tree.nodes = tree.nodes.filter(n => !toDelete.has(n.id));
+
+  // Re-order remaining siblings
+  const parentOfDeleted = tree.nodes.find(n => n.id === nodeId)?.parentId;
+  if (parentOfDeleted !== undefined) {
+    const siblings = tree.nodes
+      .filter(n => n.parentId === parentOfDeleted)
+      .sort((a, b) => a.order - b.order);
+    siblings.forEach((s, i) => { s.order = i; });
+  }
+
+  await writeTreeJson(dirHandle, tree);
+  return tree;
+}
+
+/* ═══════════════════════════════════════════
+   Utility: Get children of a node
+   ═══════════════════════════════════════════ */
+
+export function getChildren(nodes: TreeNode[], parentId: string | null): TreeNode[] {
+  return nodes
+    .filter(n => n.parentId === parentId)
+    .sort((a, b) => a.order - b.order);
+}
+
+export function getDescendantIds(nodes: TreeNode[], parentId: string): string[] {
+  const ids: string[] = [];
+  const collect = (pid: string) => {
+    nodes.filter(n => n.parentId === pid).forEach(child => {
+      ids.push(child.id);
+      collect(child.id);
+    });
+  };
+  collect(parentId);
+  return ids;
 }
