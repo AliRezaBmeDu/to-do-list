@@ -985,6 +985,7 @@ function SortableTreeNodeItem({
   onSelectFile,
   selectedFileTitle,
   onTreeUpdate,
+  dragOverId,
 }: {
   node: TreeNode;
   depth: number;
@@ -993,6 +994,7 @@ function SortableTreeNodeItem({
   onSelectFile: (title: string, handle: FileSystemFileHandle | null) => void;
   selectedFileTitle: string | null;
   onTreeUpdate: (updated: TreeJson) => void;
+  dragOverId: string | null;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [renaming, setRenaming] = useState(false);
@@ -1008,28 +1010,28 @@ function SortableTreeNodeItem({
     isDragging,
   } = useSortable({ id: node.id, data: { node, depth } });
 
+  const children = getChildren(tree.nodes, node.id);
+  const isSelected = selectedFileTitle === node.title;
+  const hasChildren = children.length > 0;
+  const isDragOver = dragOverId === node.id;
+
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
   };
 
-  const children = getChildren(tree.nodes, node.id);
-  const isSelected = selectedFileTitle === node.title;
-  const hasChildren = children.length > 0;
-
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (node.isFolder || hasChildren) {
+    if (hasChildren) {
       setExpanded(!expanded);
-    } else {
-      // Try to find the file handle in the directory and open it
+    } else if (!node.isFolder) {
       onSelectFile(node.title, null);
     }
   };
 
   const handleSelect = () => {
-    if (!node.isFolder && !hasChildren) {
+    if (!hasChildren && !node.isFolder) {
       onSelectFile(node.title, null);
     }
   };
@@ -1066,23 +1068,24 @@ function SortableTreeNodeItem({
     return () => window.removeEventListener("click", close);
   }, [contextMenu]);
 
+  // Any node can visually become a parent when it has children
+  const isVirtualParent = hasChildren;
+
   return (
     <div ref={setNodeRef} style={style}>
       <div
         className={`group flex items-center gap-1 py-1 px-1 rounded-md text-xs cursor-pointer transition-colors
           ${isSelected ? "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300" : "hover:bg-accent"}
-          ${isDragging ? "ring-1 ring-emerald-400" : ""}`}
+          ${isDragging ? "ring-1 ring-emerald-400" : ""}
+          ${isDragOver ? "bg-blue-50 dark:bg-blue-950/30 ring-1 ring-blue-400" : ""}`}
         style={{ paddingLeft: `${depth * 16 + 4}px` }}
         onClick={handleToggle}
         onContextMenu={handleContextMenu}
+        {...listeners}
+        {...attributes}
       >
-        {/* Drag handle */}
-        <button {...attributes} {...listeners} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-grab active:cursor-grabbing p-0.5">
-          <GripVertical className="w-3 h-3 text-muted-foreground" />
-        </button>
-
-        {/* Expand/collapse chevron */}
-        {(node.isFolder || hasChildren) ? (
+        {/* Expand/collapse chevron — show for any node that is a virtual parent */}
+        {isVirtualParent ? (
           <button onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }} className="p-0">
             {expanded ? <ChevronDown className="w-3 h-3 text-muted-foreground" /> : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
           </button>
@@ -1090,9 +1093,11 @@ function SortableTreeNodeItem({
           <span className="w-3" />
         )}
 
-        {/* Icon */}
-        {(node.isFolder || hasChildren) ? (
+        {/* Icon — folder-like if it has children, otherwise file icon */}
+        {isVirtualParent ? (
           expanded ? <FolderOpen className="w-4 h-4 text-amber-500 flex-shrink-0" /> : <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+        ) : node.isFolder ? (
+          <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
         ) : (
           getFileIcon(node.title)
         )}
@@ -1112,36 +1117,33 @@ function SortableTreeNodeItem({
           <span className="flex-1 truncate select-none" onClick={handleSelect}>{node.title}</span>
         )}
 
-        {/* Child count for folders */}
-        {(node.isFolder || hasChildren) && (
+        {/* Child count */}
+        {isVirtualParent && (
           <span className="text-[9px] text-muted-foreground flex-shrink-0">{children.length}</span>
         )}
 
-        {/* Unchild button for child nodes */}
-        {node.parentId !== null && (
-          <button
-            onClick={(e) => { e.stopPropagation(); handleUnchild(); }}
-            className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5"
-            title="Move to root level"
-          >
-            <CornerDownLeft className="w-3 h-3 text-muted-foreground" />
-          </button>
-        )}
+        {/* Drag indicator hint */}
+        <GripVertical className="w-3 h-3 text-muted-foreground opacity-0 group-hover:opacity-40 flex-shrink-0" />
       </div>
 
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[140px] text-xs"
+          className="fixed z-50 bg-popover border rounded-lg shadow-lg py-1 min-w-[160px] text-xs"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { setRenaming(true); setContextMenu(null); }}>
             <Edit3 className="w-3 h-3" /> Rename
           </button>
           {node.parentId !== null && (
-            <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
-              <CornerDownLeft className="w-3 h-3" /> Move to Root
-            </button>
+            <>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
+                <CornerDownLeft className="w-3 h-3" /> Unchild from Parent
+              </button>
+              <button className="w-full text-left px-3 py-1.5 hover:bg-accent flex items-center gap-2" onClick={() => { handleUnchild(); setContextMenu(null); }}>
+                <ArrowUpRight className="w-3 h-3" /> Go to Root
+              </button>
+            </>
           )}
           <button className="w-full text-left px-3 py-1.5 hover:bg-accent text-red-500 flex items-center gap-2" onClick={() => { handleDelete(); setContextMenu(null); }}>
             <Trash2 className="w-3 h-3" /> Remove from Tree
@@ -1162,6 +1164,7 @@ function SortableTreeNodeItem({
               onSelectFile={onSelectFile}
               selectedFileTitle={selectedFileTitle}
               onTreeUpdate={onTreeUpdate}
+              dragOverId={dragOverId}
             />
           ))}
         </SortableContext>
@@ -1188,7 +1191,7 @@ function TreePanel({
   const [overId, setOverId] = useState<string | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
   const rootNodes = getChildren(tree.nodes, null);
@@ -1214,6 +1217,7 @@ function TreePanel({
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
+    const currentOverId = overId;
     setActiveId(null);
     setOverId(null);
 
@@ -1224,25 +1228,19 @@ function TreePanel({
     const overNode = tree.nodes.find(n => n.id === over.id);
     if (!activeNode || !overNode) return;
 
+    // Don't allow dropping a node into itself
+    if (activeNode.id === overNode.id) return;
+
     // Don't allow dropping a parent into its own descendant
     const descendantIds = getDescendantIds(tree.nodes, activeNode.id);
     if (descendantIds.includes(overNode.id)) return;
 
-    // Determine new parent: if over node is a folder, drop inside it
-    // If over node is a file, drop as sibling (same parent)
-    let newParentId: string | null;
-    let newOrder: number;
-
-    if (overNode.isFolder || getChildren(tree.nodes, overNode.id).length > 0) {
-      // Drop inside the folder
-      newParentId = overNode.id;
-      const folderChildren = getChildren(tree.nodes, overNode.id);
-      newOrder = folderChildren.length; // Append at end
-    } else {
-      // Drop as sibling of the over node
-      newParentId = overNode.parentId;
-      newOrder = overNode.order + 1; // Insert after
-    }
+    // KEY LOGIC: Dropping onto ANY node makes the dragged node a child of that node.
+    // This creates a virtual parent-child hierarchy regardless of physical file structure.
+    // Any file (A.md) can become a parent of other files (x.md, y.md) via DnD.
+    const newParentId = overNode.id;
+    const existingChildren = getChildren(tree.nodes, overNode.id);
+    const newOrder = existingChildren.length; // Append at end
 
     const updated = await moveTreeNode(dirHandle, tree, activeNode.id, newParentId, newOrder);
     onTreeUpdate(updated);
@@ -1294,6 +1292,7 @@ function TreePanel({
                 onSelectFile={onSelectFile}
                 selectedFileTitle={selectedFileTitle}
                 onTreeUpdate={onTreeUpdate}
+                dragOverId={overId}
               />
             ))}
           </SortableContext>
