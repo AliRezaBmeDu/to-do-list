@@ -190,3 +190,160 @@ export async function createDirInDir(
 ): Promise<FileSystemDirectoryHandle> {
   return dirHandle.getDirectoryHandle(dirName, { create: true });
 }
+
+// ─── Virtual Tree JSON helpers (.taskflow-tree.json) ─────────────────
+
+export const TREE_JSON_FILE = ".taskflow-tree.json";
+
+export interface TreeNode {
+  id: string;       // filename without extension (e.g. "A" for "A.md")
+  title: string;    // display title (usually same as id)
+  parentId: string | null;
+  order: number;
+}
+
+/**
+ * Read the .taskflow-tree.json file from the attached folder.
+ * Returns null if the file doesn't exist.
+ */
+export async function readTreeJson(
+  dirHandle: FileSystemDirectoryHandle
+): Promise<TreeNode[] | null> {
+  try {
+    const fileHandle = await dirHandle.getFileHandle(TREE_JSON_FILE);
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the tree JSON back to the .taskflow-tree.json file in the folder.
+ */
+export async function writeTreeJson(
+  dirHandle: FileSystemDirectoryHandle,
+  nodes: TreeNode[]
+): Promise<void> {
+  const fileHandle = await dirHandle.getFileHandle(TREE_JSON_FILE, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(JSON.stringify(nodes, null, 2));
+  await writable.close();
+}
+
+/**
+ * Generate a default flat tree from the physical files in the directory.
+ * All nodes get parentId: null and are ordered alphabetically.
+ * Only includes files (not subdirectories), skips hidden files except .taskflow-tree.json.
+ */
+export async function generateDefaultTree(
+  dirHandle: FileSystemDirectoryHandle
+): Promise<TreeNode[]> {
+  const entries: string[] = [];
+  for await (const [name, handle] of (dirHandle as any).entries()) {
+    if (name === TREE_JSON_FILE) continue; // skip the tree file itself
+    if (name.startsWith(".")) continue;    // skip other hidden files
+    if (handle.kind === "file") {
+      // Store id as filename without extension
+      const id = name.includes(".") ? name.substring(0, name.lastIndexOf(".")) : name;
+      entries.push(id);
+    }
+  }
+  entries.sort((a, b) => a.localeCompare(b));
+  return entries.map((id, index) => ({
+    id,
+    title: id,
+    parentId: null,
+    order: index,
+  }));
+}
+
+/**
+ * Build a lookup map of physical files in the directory.
+ * Key = id (filename without extension), Value = FileSystemFileHandle
+ */
+export async function buildFileHandleMap(
+  dirHandle: FileSystemDirectoryHandle
+): Promise<Map<string, FileSystemFileHandle>> {
+  const map = new Map<string, FileSystemFileHandle>();
+  for await (const [name, handle] of (dirHandle as any).entries()) {
+    if (name === TREE_JSON_FILE) continue;
+    if (name.startsWith(".")) continue;
+    if (handle.kind === "file") {
+      const id = name.includes(".") ? name.substring(0, name.lastIndexOf(".")) : name;
+      map.set(id, handle);
+    }
+  }
+  return map;
+}
+
+/**
+ * Get the full filename for a node id by finding the matching file in the directory.
+ * Returns the first file that matches the id (with any extension).
+ */
+export function findFileNameForId(fileMap: Map<string, string>, id: string): string | null {
+  return fileMap.get(id) || null;
+}
+
+/**
+ * Sync tree nodes with physical files:
+ * - Add nodes for files that don't have one
+ * - Remove nodes for files that no longer exist
+ * - Preserve existing hierarchy
+ */
+export async function syncTreeWithFiles(
+  dirHandle: FileSystemDirectoryHandle,
+  existingNodes: TreeNode[]
+): Promise<{ nodes: TreeNode[]; fileMap: Map<string, FileSystemFileHandle> }> {
+  const fileHandles = await buildFileHandleMap(dirHandle);
+  const existingIds = new Set(existingNodes.map((n) => n.id));
+
+  // Build a map of id -> full filename for display
+  // (fileHandles already has the correct ids)
+
+  // Find new files that need nodes
+  const newNodes: TreeNode[] = [];
+  let maxOrder = existingNodes.reduce((max, n) => (n.parentId === null ? Math.max(max, n.order) : max), -1);
+
+  for (const [id] of fileHandles) {
+    if (!existingIds.has(id)) {
+      maxOrder++;
+      newNodes.push({
+        id,
+        title: id,
+        parentId: null,
+        order: maxOrder,
+      });
+    }
+  }
+
+  // Remove nodes for files that no longer exist
+  // Also remove children of deleted nodes (cascade)
+  const validIds = new Set(fileHandles.keys());
+  const deletedIds = new Set(existingIds);
+
+  // Find all ids that should be removed (not in validIds)
+  for (const id of validIds) {
+    deletedIds.delete(id);
+  }
+
+  // Also cascade: if a parent is deleted, its children become root-level
+  const survivingNodes = existingNodes.filter((n) => validIds.has(n.id));
+  const survivingIds = new Set(survivingNodes.map((n) => n.id));
+
+  // Re-parent orphaned children to root
+  const reParented = survivingNodes.map((n) => {
+    if (n.parentId && !survivingIds.has(n.parentId)) {
+      return { ...n, parentId: null };
+    }
+    return n;
+  });
+
+  return {
+    nodes: [...reParented, ...newNodes],
+    fileMap: fileHandles,
+  };
+}
