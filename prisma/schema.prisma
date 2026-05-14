@@ -81,7 +81,6 @@ model Task {
   recurRule   String?
   completedAt String?
   folderName  String?   // Name of the local folder associated with this task
-  folderPath  String?   // Full path of the local folder (for display/reference, actual access via IndexedDB handle)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }
@@ -151,8 +150,6 @@ model ProjectTask {
   isRecurring Boolean   @default(false)
   recurRule   String?
   completedAt String?
-  folderName  String?   // Name of the local folder associated with this project task
-  folderPath  String?   // Full path of the local folder (for display/reference)
 
   assigneeId  String?   @db.ObjectId
   projectId   String    @db.ObjectId

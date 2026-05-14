@@ -425,6 +425,29 @@ export async function unchildTreeNode(
 }
 
 /**
+ * Unchild only this node — set parentId to null but keep children attached.
+ * Unlike unchildTreeNode, descendants remain as children of this node.
+ */
+export async function unchildOnlySelf(
+  dirHandle: FileSystemDirectoryHandle,
+  tree: TreeJson,
+  nodeId: string
+): Promise<TreeJson> {
+  const node = tree.nodes.find((n) => n.id === nodeId);
+  if (!node || node.parentId === null) return tree;
+
+  const maxRootOrder = tree.nodes
+    .filter(n => n.parentId === null)
+    .reduce((max, n) => Math.max(max, n.order), 0);
+
+  node.parentId = null;
+  node.order = maxRootOrder + 1;
+
+  await writeTreeJson(dirHandle, tree);
+  return tree;
+}
+
+/**
  * Rename a node's title.
  */
 export async function renameTreeNode(
