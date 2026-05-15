@@ -27,7 +27,7 @@ import {
   TreeNode, TreeJson,
   readTreeJson, writeTreeJson, ensureTreeJson, moveTreeNode,
   unchildTreeNode, unchildOnlySelf, addTreeNode, deleteTreeNode, renameTreeNode,
-  createNewFile, createNewFolder,
+  createNewFile, createNewFolder, renamePhysicalFile, deletePhysicalFile,
   getChildren, getDescendantIds,
   saveDirectoryHandle, loadDirectoryHandle, requestPermission, checkPermission,
 } from "@/lib/fileSystem";

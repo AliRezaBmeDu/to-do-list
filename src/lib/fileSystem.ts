@@ -448,7 +448,129 @@ export async function unchildOnlySelf(
 }
 
 /**
- * Rename a node's title.
+ * Rename a physical file or folder on disk.
+ * The File System Access API has no native rename, so we:
+ * 1. Read the old file's content (or enumerate folder entries)
+ * 2. Create a new file/folder with the new name
+ * 3. Write the content to the new file
+ * 4. Delete the old entry
+ */
+export async function renamePhysicalFile(
+  dirHandle: FileSystemDirectoryHandle,
+  oldName: string,
+  newName: string
+): Promise<boolean> {
+  try {
+    // Skip if names are the same
+    if (oldName === newName) return true;
+
+    // Check if old entry exists
+    let isDirectory = false;
+    try {
+      await dirHandle.getDirectoryHandle(oldName);
+      isDirectory = true;
+    } catch {
+      // Not a directory, try as file
+    }
+
+    if (isDirectory) {
+      // For a directory: create new dir, copy all entries, then remove old
+      const newDirHandle = await dirHandle.getDirectoryHandle(newName, { create: true });
+      const oldDirHandle = await dirHandle.getDirectoryHandle(oldName);
+
+      // Copy all entries from old to new directory
+      for await (const [name, entry] of (oldDirHandle as any).entries()) {
+        if (entry.kind === "file") {
+          const oldFileHandle = await oldDirHandle.getFileHandle(name);
+          const file = await oldFileHandle.getFile();
+          const content = await file.text();
+          const newFileHandle = await newDirHandle.getFileHandle(name, { create: true });
+          const writable = await newFileHandle.createWritable();
+          await writable.write(content);
+          await writable.close();
+        } else if (entry.kind === "directory") {
+          // Recursively copy subdirectories
+          await copyDirectoryRecursive(oldDirHandle, newDirHandle, name);
+        }
+      }
+
+      // Remove old directory
+      await dirHandle.removeEntry(oldName, { recursive: true });
+    } else {
+      // For a file: read content, create new, write, delete old
+      const oldFileHandle = await dirHandle.getFileHandle(oldName);
+      const file = await oldFileHandle.getFile();
+      const content = await file.text();
+
+      const newFileHandle = await dirHandle.getFileHandle(newName, { create: true });
+      const writable = await newFileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      // Delete the old file
+      await dirHandle.removeEntry(oldName);
+    }
+
+    return true;
+  } catch (err) {
+    console.error("renamePhysicalFile error:", err);
+    return false;
+  }
+}
+
+/**
+ * Helper: recursively copy a subdirectory from one parent to another.
+ */
+async function copyDirectoryRecursive(
+  srcParent: FileSystemDirectoryHandle,
+  destParent: FileSystemDirectoryHandle,
+  dirName: string
+): Promise<void> {
+  const srcDir = await srcParent.getDirectoryHandle(dirName);
+  const destDir = await destParent.getDirectoryHandle(dirName, { create: true });
+
+  for await (const [name, entry] of (srcDir as any).entries()) {
+    if (entry.kind === "file") {
+      const fileHandle = await srcDir.getFileHandle(name);
+      const file = await fileHandle.getFile();
+      const content = await file.text();
+      const newHandle = await destDir.getFileHandle(name, { create: true });
+      const writable = await newHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+    } else if (entry.kind === "directory") {
+      await copyDirectoryRecursive(srcDir, destDir, name);
+    }
+  }
+}
+
+/**
+ * Delete a physical file or folder from disk.
+ */
+export async function deletePhysicalFile(
+  dirHandle: FileSystemDirectoryHandle,
+  name: string
+): Promise<boolean> {
+  try {
+    // Determine if it's a file or directory
+    let isDirectory = false;
+    try {
+      await dirHandle.getDirectoryHandle(name);
+      isDirectory = true;
+    } catch {
+      // Not a directory
+    }
+
+    await dirHandle.removeEntry(name, { recursive: isDirectory });
+    return true;
+  } catch (err) {
+    console.error("deletePhysicalFile error:", err);
+    return false;
+  }
+}
+
+/**
+ * Rename a node's title — also renames the physical file/folder on disk.
  */
 export async function renameTreeNode(
   dirHandle: FileSystemDirectoryHandle,
@@ -458,7 +580,22 @@ export async function renameTreeNode(
 ): Promise<TreeJson> {
   const node = tree.nodes.find((n) => n.id === nodeId);
   if (!node) return tree;
+
+  const oldTitle = node.title;
+  if (oldTitle === newTitle) return tree;
+
+  // Rename the physical file/folder on disk first
+  const diskOk = await renamePhysicalFile(dirHandle, oldTitle, newTitle);
+  if (!diskOk) {
+    // If disk rename fails, still update the virtual tree
+    // (the file might not exist on disk if it's a virtual-only node)
+    console.warn(`Failed to rename physical file "${oldTitle}" → "${newTitle}"`);
+  }
+
+  // Update the virtual tree node
   node.title = newTitle;
+
+  // Update any children's paths (no-op for virtual tree since we use IDs not paths)
   await writeTreeJson(dirHandle, tree);
   return tree;
 }
@@ -491,12 +628,14 @@ export async function addTreeNode(
 
 /**
  * Delete a node and all its descendants from the tree.
+ * Also deletes the physical files/folders from disk.
  */
 export async function deleteTreeNode(
   dirHandle: FileSystemDirectoryHandle,
   tree: TreeJson,
   nodeId: string
 ): Promise<TreeJson> {
+  // Collect all node IDs to delete (node + descendants)
   const toDelete = new Set<string>();
   const collectIds = (id: string) => {
     toDelete.add(id);
@@ -504,13 +643,33 @@ export async function deleteTreeNode(
   };
   collectIds(nodeId);
 
+  // Delete physical files for each node being removed
+  // Only delete the root-level physical entries (descendants are inside their parent directories)
+  const deletedParentIds = new Set<string>();
+  for (const id of toDelete) {
+    const node = tree.nodes.find(n => n.id === id);
+    if (!node) continue;
+
+    // Only delete physical files for root nodes or nodes whose parent is NOT being deleted
+    // (because if a parent folder is deleted, all its contents are already gone)
+    if (node.parentId === null || !toDelete.has(node.parentId)) {
+      await deletePhysicalFile(dirHandle, node.title);
+    }
+  }
+
+  // Remove nodes from the virtual tree
   tree.nodes = tree.nodes.filter(n => !toDelete.has(n.id));
 
   // Re-order remaining siblings
-  const parentOfDeleted = tree.nodes.find(n => n.id === nodeId)?.parentId;
-  if (parentOfDeleted !== undefined) {
+  const deletedNode = tree.nodes.find(n => n.id === nodeId); // won't exist anymore
+  // Find parent of deleted node (if it still exists)
+  const parentOfDeleted = toDelete.size > 0 ? null : null; // parent was already removed
+  // Actually, let's re-order all remaining siblings properly
+  const parentIds = new Set<string | null>();
+  tree.nodes.forEach(n => parentIds.add(n.parentId));
+  for (const pid of parentIds) {
     const siblings = tree.nodes
-      .filter(n => n.parentId === parentOfDeleted)
+      .filter(n => n.parentId === pid)
       .sort((a, b) => a.order - b.order);
     siblings.forEach((s, i) => { s.order = i; });
   }
