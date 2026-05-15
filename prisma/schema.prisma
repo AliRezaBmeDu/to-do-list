@@ -150,6 +150,7 @@ model ProjectTask {
   isRecurring Boolean   @default(false)
   recurRule   String?
   completedAt String?
+  folderName  String?   // Name of the local folder associated with this task
 
   assigneeId  String?   @db.ObjectId
   projectId   String    @db.ObjectId

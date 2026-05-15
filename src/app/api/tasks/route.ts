@@ -110,6 +110,7 @@ export async function GET() {
       isRecurring: t.isRecurring,
       recurRule: t.recurRule,
       completedAt: t.completedAt,
+      folderName: t.folderName ?? null,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
       source: "project" as const,
