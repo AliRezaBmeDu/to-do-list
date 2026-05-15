@@ -27,6 +27,7 @@ import {
   TreeNode, TreeJson,
   readTreeJson, writeTreeJson, ensureTreeJson, moveTreeNode,
   unchildTreeNode, unchildOnlySelf, addTreeNode, deleteTreeNode, renameTreeNode,
+  createNewFile, createNewFolder,
   getChildren, getDescendantIds,
   saveDirectoryHandle, loadDirectoryHandle, requestPermission, checkPermission,
 } from "@/lib/fileSystem";
@@ -1270,7 +1271,28 @@ function TreePanel({
   };
 
   const handleAddNode = async (isFolder: boolean) => {
-    const title = isFolder ? "New Folder" : "new-file.txt";
+    // Generate a unique title to avoid collisions
+    const existingTitles = new Set(tree.nodes.filter(n => n.parentId === null).map(n => n.title));
+    let title = isFolder ? "New Folder" : "new-file.txt";
+    let counter = 1;
+    while (existingTitles.has(title)) {
+      title = isFolder ? `New Folder ${counter++}` : `new-file-${counter++}.txt`;
+    }
+
+    // Create the physical file/folder on disk FIRST
+    let diskOk = false;
+    if (isFolder) {
+      diskOk = await createNewFolder(dirHandle, title);
+    } else {
+      diskOk = await createNewFile(dirHandle, title);
+    }
+
+    if (!diskOk) {
+      toast.error(`Failed to create ${isFolder ? "folder" : "file"} on disk. Check folder permissions.`);
+      return;
+    }
+
+    // Then add the node to the virtual tree JSON
     const { tree: updated } = await addTreeNode(dirHandle, tree, title, null, isFolder);
     onTreeUpdate(updated);
   };
@@ -1373,8 +1395,11 @@ function TaskDetailView() {
     (async () => {
       const saved = await loadDirectoryHandle(selectedTask.id);
       if (saved) {
-        const granted = await checkPermission(saved, "read");
-        if (granted) {
+        // Try readwrite first (needed for tree JSON updates & file creation),
+        // fall back to read-only if user only grants that
+        const writeGranted = await checkPermission(saved, "readwrite");
+        const readGranted = writeGranted || await checkPermission(saved, "read");
+        if (readGranted) {
           setDirHandle(saved);
           setTreeLoading(true);
           try {
@@ -1523,8 +1548,11 @@ function TaskDetailView() {
   };
 
   // Handle tree update from DnD or other mutations
+  // MUST create a new object reference so React detects the change and re-renders.
+  // The tree mutation functions (addTreeNode, moveTreeNode, etc.) mutate in place
+  // and return the same reference — React would skip re-render if we just setTree(updated).
   const handleTreeUpdate = (updated: TreeJson) => {
-    setTree(updated);
+    setTree({ ...updated, nodes: [...updated.nodes] });
   };
 
   return (
